@@ -295,6 +295,33 @@ CertFlow</textarea>
         let participants  = [];
         let csvParticipants = [];
         let attachmentsZipData = null;
+        let currentEmailMode = 'cert'; // 'cert', 'zip', 'both'
+
+        function setEmailMode(mode) {
+            currentEmailMode = mode;
+            document.querySelectorAll('.mode-toggle-btn').forEach(btn => {
+                btn.classList.toggle('active', btn.dataset.mode === mode);
+            });
+
+            const certSec = document.getElementById('certAttachmentSection');
+            const zipSec = document.getElementById('zipAttachmentSection');
+
+            if (mode === 'cert') {
+                certSec.style.display = '';
+                zipSec.style.display = 'none';
+            } else if (mode === 'zip') {
+                certSec.style.display = 'none';
+                zipSec.style.display = '';
+            } else { // both
+                certSec.style.display = '';
+                zipSec.style.display = '';
+            }
+            updateSendBtnState();
+        }
+
+        document.querySelectorAll('.mode-toggle-btn').forEach(btn => {
+            btn.addEventListener('click', () => setEmailMode(btn.dataset.mode));
+        });
 
         // ── Template upload ───────────────────────────────────────────────────
         const templateUpload = document.getElementById('templateUpload');
@@ -310,6 +337,7 @@ CertFlow</textarea>
             if (f && ALLOWED_TYPES.includes(f.type)) loadTemplate(f);
             else if (f) alert('Unsupported file type.');
         });
+
         function updateSendBtnState() {
             const list = parseParticipants();
             const sendBtn = document.getElementById('sendBtn');
@@ -321,18 +349,16 @@ CertFlow</textarea>
 
             if (list.length > 0) {
                 sendBtn.disabled = false;
-                if (templateImage && attachmentsZipData) {
-                    sendBtn.textContent = 'Send Certificates + ZIP Attachments via Email';
-                } else if (templateImage) {
-                    sendBtn.textContent = 'Send Certificates via Email';
-                } else if (attachmentsZipData) {
-                    sendBtn.textContent = 'Send Confirmation & ZIP Attachments via Email';
+                if (currentEmailMode === 'cert') {
+                    sendBtn.textContent = 'Send Automated Certificates via Email';
+                } else if (currentEmailMode === 'zip') {
+                    sendBtn.textContent = 'Send Custom ZIP Attachments via Email';
                 } else {
-                    sendBtn.textContent = 'Send Confirmation Emails';
+                    sendBtn.textContent = 'Send Certificates + ZIP Attachments via Email';
                 }
             } else {
                 sendBtn.disabled = true;
-                sendBtn.textContent = templateImage ? 'Send Certificates via Email' : 'Send Emails (Add Participants First)';
+                sendBtn.textContent = 'Send Emails (Add Participants First)';
             }
         }
 
@@ -559,6 +585,13 @@ CertFlow</textarea>
             participants = parseParticipants();
             if (!participants.length) return alert('Add participant data first.');
 
+            if ((currentEmailMode === 'cert' || currentEmailMode === 'both') && !templateImage) {
+                return alert('Please upload a certificate template in Step 1 for automated certificates.');
+            }
+            if ((currentEmailMode === 'zip' || currentEmailMode === 'both') && !attachmentsZipData) {
+                return alert('Please upload a ZIP file in Step 5 for custom attachments.');
+            }
+
             const withEmail = participants.filter(p => p.email);
             if (!withEmail.length) return alert('No participants have an email address. Add an Email column to your CSV or manual input.');
 
@@ -575,10 +608,10 @@ CertFlow</textarea>
             btn.disabled = true;
 
             const payload = {
-                template:          templateImage,
+                template:          (currentEmailMode === 'zip' ? null : templateImage),
                 participants,
                 settings:          getSettings(),
-                attachmentsZip:    attachmentsZipData,
+                attachmentsZip:    (currentEmailMode === 'cert' ? null : attachmentsZipData),
                 smtpProvider:      document.getElementById('smtpProvider').value,
                 smtpHost:          document.getElementById('smtpHost').value,
                 smtpPort:          document.getElementById('smtpPort').value,
