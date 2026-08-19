@@ -43,7 +43,7 @@
             <div class="upload-area" id="csvUpload" style="padding: 18px;">
                 <span class="upload-icon" style="font-size:18px;">📊</span>
                 <p>Click or drag a CSV file here</p>
-                <p class="hint">Columns: Name, Department, Email &nbsp;(header row optional)</p>
+                <p class="hint">Columns: String 1, String 2, Email ID &nbsp;(header row optional)</p>
                 <input type="file" id="csvFile" accept=".csv">
             </div>
             <div id="csvStatus" style="display:none;">
@@ -55,15 +55,15 @@
             <h3>Paste manually</h3>
             <textarea id="participantData" placeholder="John Doe, Computer Science, john@example.com
 Jane Smith, ECE, jane@example.com
-Robert Kumar, AI &amp; DS"></textarea>
-            <p style="margin-top:6px; font-size:12px; color:var(--text-muted);">Name, Department, Email — one per line. Email is optional but required for auto-send.</p>
+Robert Kumar, AI &amp; DS, robert@example.com"></textarea>
+            <p style="margin-top:6px; font-size:12px; color:var(--text-muted);">String 1, String 2, Email ID — one per line. Email ID is optional for generation, required for auto-send.</p>
         </div>
 
         <!-- Step 3: Text placement -->
         <div class="section">
             <div class="section-title">Step 3 — Text Placement</div>
 
-            <h3>Name</h3>
+            <h3>String 1</h3>
             <div class="controls">
                 <div class="control-group">
                     <label>X Position (px)</label>
@@ -95,7 +95,7 @@ Robert Kumar, AI &amp; DS"></textarea>
                 </div>
             </div>
 
-            <h3>Department</h3>
+            <h3>String 2</h3>
             <div class="controls">
                 <div class="control-group">
                     <label>X Position (px)</label>
@@ -219,18 +219,18 @@ Robert Kumar, AI &amp; DS"></textarea>
             <div class="controls" style="margin-top:14px;">
                 <div class="control-group" style="grid-column: 1 / -1;">
                     <label>Email Subject</label>
-                    <input type="text" id="emailSubject" value="Your Certificate is here, {name}!">
+                    <input type="text" id="emailSubject" value="Your Certificate / Details, {string1}!">
                 </div>
             </div>
             <div class="control-group" style="margin-top:12px;">
                 <label>Email Body</label>
-                <textarea id="emailBody" style="min-height:90px;">Hi {name},
+                <textarea id="emailBody" style="min-height:90px;">Hi {string1},
 
-Congratulations! Please find your certificate attached.
+Congratulations! Please find your details/certificate attached.
 
 Regards,
 CertFlow</textarea>
-                <p style="margin-top:4px; font-size:12px; color:var(--text-muted);">Use <code>{name}</code> and <code>{department}</code> as placeholders.</p>
+                <p style="margin-top:4px; font-size:12px; color:var(--text-muted);">Use <code>{string1}</code> (or <code>{name}</code>) and <code>{string2}</code> (or <code>{department}</code>) as placeholders.</p>
             </div>
 
             <!-- Email Attachment Mode Switcher -->
@@ -446,8 +446,11 @@ CertFlow</textarea>
             if (!raw) return [];
             return raw.split('\n').filter(l => l.trim()).map(line => {
                 const parts = line.split(',').map(p => p.trim());
-                return { name: parts[0] || '', department: parts[1] || '', email: parts[2] || '' };
-            }).filter(p => p.name);
+                const str1 = parts[0] || '';
+                const str2 = parts[1] || '';
+                const email = parts[2] || '';
+                return { string1: str1, string2: str2, name: str1, department: str2, email: email };
+            }).filter(p => p.string1 || p.name);
         }
 
         function getSettings() {

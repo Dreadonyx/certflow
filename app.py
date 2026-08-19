@@ -99,8 +99,8 @@ def decode_template(template_data):
     return image, pil_format, ext
 
 
-def draw_certificate(template_image, name, department, settings):
-    """Overlay name + department text on a copy of the template."""
+def draw_certificate(template_image, str1, str2, settings):
+    """Overlay string 1 + string 2 text on a copy of the template."""
     cert = template_image.copy()
     draw = ImageDraw.Draw(cert)
 
@@ -111,11 +111,11 @@ def draw_certificate(template_image, name, department, settings):
 
     draw.text(
         (int(settings.get('nameX', 420)), int(settings.get('nameY', 270))),
-        name, fill=hex_to_rgb(settings.get('nameColor', '#000000')), font=name_font,
+        str1, fill=hex_to_rgb(settings.get('nameColor', '#000000')), font=name_font,
     )
     draw.text(
         (int(settings.get('deptX', 76)), int(settings.get('deptY', 303))),
-        department, fill=hex_to_rgb(settings.get('deptColor', '#000000')), font=dept_font,
+        str2, fill=hex_to_rgb(settings.get('deptColor', '#000000')), font=dept_font,
     )
     return cert
 
@@ -308,7 +308,7 @@ def bulk_editor():
 
 @app.route('/parse-csv', methods=['POST'])
 def parse_csv():
-    """Parse CSV → [{name, department, email}, …]"""
+    """Parse CSV → [{string1, string2, email}, …]"""
     try:
         if 'csvFile' not in request.files or request.files['csvFile'].filename == '':
             return jsonify({'success': False, 'error': 'No file uploaded'}), 400
@@ -317,16 +317,21 @@ def parse_csv():
         rows = list(csv.reader(stream))
 
         # Auto-detect header row
-        if rows and rows[0] and rows[0][0].strip().lower() in ('name', 'participant'):
+        if rows and rows[0] and rows[0][0].strip().lower() in ('name', 'participant', 'string1', 'string 1', 'str1'):
             rows = rows[1:]
 
         participants = []
         for row in rows:
             if row and row[0].strip():
+                str1 = row[0].strip()
+                str2 = row[1].strip() if len(row) > 1 else ''
+                email = row[2].strip() if len(row) > 2 else ''
                 participants.append({
-                    'name':       row[0].strip(),
-                    'department': row[1].strip() if len(row) > 1 else '',
-                    'email':      row[2].strip() if len(row) > 2 else '',
+                    'string1':    str1,
+                    'string2':    str2,
+                    'name':       str1,
+                    'department': str2,
+                    'email':      email,
                 })
 
         return jsonify({'success': True, 'participants': participants, 'count': len(participants)})
@@ -386,7 +391,9 @@ def generate_certificate():
     try:
         data = request.json
         template_image, pil_format, ext = decode_template(data['template'])
-        cert = draw_certificate(template_image, data.get('name', ''), data.get('department', ''), data)
+        str1 = data.get('string1') or data.get('name', '')
+        str2 = data.get('string2') or data.get('department', '')
+        cert = draw_certificate(template_image, str1, str2, data)
         img_bytes = image_to_bytes(cert, pil_format)
         mime = 'image/jpeg' if ext == 'jpg' else f'image/{ext}'
         return jsonify({
@@ -412,7 +419,9 @@ def generate_batch():
 
         certs = []
         for p in participants:
-            c = draw_certificate(template_image, p['name'], p.get('department', ''), settings)
+            str1 = p.get('string1') or p.get('name', '')
+            str2 = p.get('string2') or p.get('department', '')
+            c = draw_certificate(template_image, str1, str2, settings)
             if pil_format in ('JPEG', 'PDF') and c.mode in ('RGBA', 'P'):
                 c = c.convert('RGB')
             certs.append(c)
@@ -598,29 +607,31 @@ def send_certificates():
 
             for i, p in enumerate(participants):
                 email_addr = (p.get('email') or '').strip()
-                p_name = p.get('name', '')
-                p_dept = p.get('department', '')
+                p_str1 = p.get('string1') or p.get('name', '')
+                p_str2 = p.get('string2') or p.get('department', '')
                 if not email_addr:
                     skipped += 1
-                    yield f"data: {json.dumps({'type': 'skip', 'name': p_name, 'reason': 'no email'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'skip', 'name': p_str1, 'reason': 'no email'})}\n\n"
                     continue
 
                 try:
                     # Live status update before sending payload
-                    progress_msg = f"Sending {i + 1}/{total}: {p_name} ({email_addr})..."
-                    yield f"data: {json.dumps({'type': 'progress', 'name': p_name, 'email': email_addr, 'index': i + 1, 'total': total, 'message': progress_msg})}\n\n"
+                    progress_msg = f"Sending {i + 1}/{total}: {p_str1} ({email_addr})..."
+                    yield f"data: {json.dumps({'type': 'progress', 'name': p_str1, 'email': email_addr, 'index': i + 1, 'total': total, 'message': progress_msg})}\n\n"
 
-                    personal_body = body.replace('{name}', p_name).replace('{department}', p_dept)
+                    personal_body = body.replace('{string1}', p_str1).replace('{name}', p_str1)\
+                                        .replace('{string2}', p_str2).replace('{department}', p_str2)
 
                     msg = MIMEMultipart()
                     msg['From']    = f'{from_name} <{smtp_user}>'
                     msg['To']      = email_addr
-                    msg['Subject'] = subject.replace('{name}', p_name).replace('{department}', p_dept)
+                    msg['Subject'] = subject.replace('{string1}', p_str1).replace('{name}', p_str1)\
+                                            .replace('{string2}', p_str2).replace('{department}', p_str2)
                     msg.attach(MIMEText(personal_body, 'plain', 'utf-8'))
 
                     # Generate and attach certificate if template was provided
                     if has_template and template_image:
-                        cert = draw_certificate(template_image, p_name, p_dept, settings)
+                        cert = draw_certificate(template_image, p_str1, p_str2, settings)
 
                         # Convert to chosen attachment format
                         if out_fmt == 'PDF':
@@ -632,7 +643,7 @@ def send_certificates():
                         else:
                             cert_bytes = image_to_bytes(cert, out_fmt)
 
-                        attach_name = f"{p_name.replace(' ', '_')}_certificate.{out_ext}"
+                        attach_name = f"{p_str1.replace(' ', '_')}_certificate.{out_ext}"
                         attachment = MIMEApplication(cert_bytes, Name=attach_name)
                         attachment['Content-Disposition'] = f'attachment; filename="{attach_name}"'
                         msg.attach(attachment)
