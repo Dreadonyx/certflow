@@ -1,0 +1,658 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CertFlow — Certificate Automation</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+
+        <div class="header">
+            <div class="header-top">
+                <a class="brand" href="/">
+                    <span class="brand-icon">⬡</span>
+                    <span class="brand-name">CertFlow</span>
+                </a>
+                <nav class="nav-links" aria-label="Primary">
+                    <a class="nav-link active" href="/">Generator</a>
+                    <a class="nav-link" href="/bulk-editor">Bulk Certificate Editor</a>
+                </nav>
+            </div>
+            <p class="tagline">Generate &amp; deliver certificates, automatically.</p>
+        </div>
+
+        <!-- Step 1: Template -->
+        <div class="section">
+            <div class="section-title">Step 1 — Template <span class="badge" style="font-size:11px; margin-left:8px; opacity:0.8;">Optional for email-only / QR mail</span></div>
+            <div class="upload-area" id="templateUpload">
+                <span class="upload-icon">🖼</span>
+                <p>Click or drag to upload certificate template</p>
+                <p class="hint">PNG, JPG, WebP, BMP, TIFF, GIF (leave blank if only emailing QR codes/confirmations)</p>
+                <input type="file" id="templateFile" accept="image/png,image/jpeg,image/webp,image/bmp,image/tiff,image/gif">
+            </div>
+            <div class="preview" id="templatePreview"></div>
+        </div>
+
+        <!-- Step 2: Participants -->
+        <div class="section">
+            <div class="section-title">Step 2 — Participants</div>
+
+            <h3>Upload CSV</h3>
+            <div class="upload-area" id="csvUpload" style="padding: 18px;">
+                <span class="upload-icon" style="font-size:18px;">📊</span>
+                <p>Click or drag a CSV file here</p>
+                <p class="hint">Columns: Name, Department, Email &nbsp;(header row optional)</p>
+                <input type="file" id="csvFile" accept=".csv">
+            </div>
+            <div id="csvStatus" style="display:none;">
+                <div class="alert alert-success">✓ <span id="csvCount"></span> participants loaded</div>
+            </div>
+
+            <div class="divider">or</div>
+
+            <h3>Paste manually</h3>
+            <textarea id="participantData" placeholder="John Doe, Computer Science, john@example.com
+Jane Smith, ECE, jane@example.com
+Robert Kumar, AI &amp; DS"></textarea>
+            <p style="margin-top:6px; font-size:12px; color:var(--text-muted);">Name, Department, Email — one per line. Email is optional but required for auto-send.</p>
+        </div>
+
+        <!-- Step 3: Text placement -->
+        <div class="section">
+            <div class="section-title">Step 3 — Text Placement</div>
+
+            <h3>Name</h3>
+            <div class="controls">
+                <div class="control-group">
+                    <label>X Position (px)</label>
+                    <input type="number" id="nameX" value="420">
+                </div>
+                <div class="control-group">
+                    <label>Y Position (px)</label>
+                    <input type="number" id="nameY" value="270">
+                </div>
+                <div class="control-group">
+                    <label>Font Size (px)</label>
+                    <input type="number" id="nameFontSize" value="38">
+                </div>
+                <div class="control-group">
+                    <label>Font</label>
+                    <select id="nameFont">
+                        <option value="georgia.ttf">Georgia</option>
+                        <option value="times.ttf">Times New Roman</option>
+                        <option value="arial.ttf">Arial</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label>Color</label>
+                    <input type="color" id="nameColor" value="#000000">
+                </div>
+                <div class="control-group">
+                    <label>Bold</label>
+                    <input type="checkbox" id="nameBold" style="margin-top: 8px;">
+                </div>
+            </div>
+
+            <h3>Department</h3>
+            <div class="controls">
+                <div class="control-group">
+                    <label>X Position (px)</label>
+                    <input type="number" id="deptX" value="76">
+                </div>
+                <div class="control-group">
+                    <label>Y Position (px)</label>
+                    <input type="number" id="deptY" value="303">
+                </div>
+                <div class="control-group">
+                    <label>Font Size (px)</label>
+                    <input type="number" id="deptFontSize" value="32">
+                </div>
+                <div class="control-group">
+                    <label>Font</label>
+                    <select id="deptFont">
+                        <option value="georgia.ttf">Georgia</option>
+                        <option value="times.ttf">Times New Roman</option>
+                        <option value="arial.ttf">Arial</option>
+                    </select>
+                </div>
+                <div class="control-group">
+                    <label>Color</label>
+                    <input type="color" id="deptColor" value="#000000">
+                </div>
+                <div class="control-group">
+                    <label>Bold</label>
+                    <input type="checkbox" id="deptBold" style="margin-top: 8px;">
+                </div>
+            </div>
+
+            <button class="btn btn-secondary" id="previewBtn" disabled>Preview First Certificate</button>
+        </div>
+
+        <!-- Preview -->
+        <div id="previewArea" style="display:none;">
+            <div class="section">
+                <div class="section-title">Preview</div>
+                <div class="preview">
+                    <img id="previewImage" alt="Certificate preview">
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4: Export -->
+        <div class="section">
+            <div class="section-title">Step 4 — Export</div>
+            <div class="controls" style="margin-bottom:4px;">
+                <div class="control-group">
+                    <label>Export Format</label>
+                    <select id="exportFormat">
+                        <option value="same">Same as template</option>
+                        <option value="png">PNG</option>
+                        <option value="jpg">JPG</option>
+                        <option value="webp">WebP</option>
+                        <option value="pdf">PDF (merged, single file)</option>
+                        <option value="pdf_each">PDF (each, separate files)</option>
+                    </select>
+                </div>
+            </div>
+            <button class="btn btn-primary" id="generateBtn" disabled>Download All Certificates</button>
+
+            <div class="progress" id="downloadProgress">
+                <div class="progress-label" id="downloadStatus">Generating...</div>
+                <div class="progress-track"><div class="progress-fill" id="downloadFill"></div></div>
+                <div class="status" id="downloadDetail"></div>
+            </div>
+        </div>
+
+        <!-- Step 5: Email -->
+        <div class="section">
+            <div class="section-title">Step 5 — Auto-Send via Email <span class="badge">Optional</span></div>
+
+            <div class="info-box" style="margin-bottom:16px;">
+                Certificates are generated individually and emailed as attachments. Make sure your CSV includes an <strong>Email</strong> column.
+                For Gmail, you <strong>must</strong> use an <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener">App Password</a> — your regular password will not work.
+            </div>
+
+            <div class="controls">
+                <div class="control-group">
+                    <label>Email Provider</label>
+                    <select id="smtpProvider" onchange="onProviderChange()">
+                        <option value="gmail">Gmail</option>
+                        <option value="outlook">Outlook / Hotmail</option>
+                        <option value="yahoo">Yahoo Mail</option>
+                        <option value="zoho">Zoho Mail</option>
+                        <option value="custom">Custom SMTP</option>
+                    </select>
+                </div>
+                <div class="control-group" id="smtpHostGroup" style="display:none;">
+                    <label>SMTP Host</label>
+                    <input type="text" id="smtpHost" placeholder="smtp.example.com">
+                </div>
+                <div class="control-group" id="smtpPortGroup" style="display:none;">
+                    <label>SMTP Port</label>
+                    <input type="number" id="smtpPort" value="587">
+                </div>
+            </div>
+
+            <div class="controls" style="margin-top:12px;">
+                <div class="control-group">
+                    <label>Your Email (sender)</label>
+                    <input type="text" id="smtpUser" placeholder="you@gmail.com">
+                </div>
+                <div class="control-group">
+                    <label>Password / App Password</label>
+                    <input type="password" id="smtpPass" placeholder="••••••••••••">
+                </div>
+                <div class="control-group">
+                    <label>Sender Name</label>
+                    <input type="text" id="fromName" placeholder="CertFlow" value="CertFlow">
+                </div>
+            </div>
+
+            <!-- Test connection row -->
+            <div style="margin-top:10px; display:flex; align-items:center; gap:12px;">
+                <button class="btn btn-secondary" id="testSmtpBtn" type="button" style="padding:8px 18px; font-size:13px;">🔌 Test Connection</button>
+                <span id="testSmtpResult" style="font-size:13px;"></span>
+            </div>
+
+            <div class="controls" style="margin-top:14px;">
+                <div class="control-group" style="grid-column: 1 / -1;">
+                    <label>Email Subject</label>
+                    <input type="text" id="emailSubject" value="Your Certificate is here, {name}!">
+                </div>
+            </div>
+            <div class="control-group" style="margin-top:12px;">
+                <label>Email Body</label>
+                <textarea id="emailBody" style="min-height:90px;">Hi {name},
+
+Congratulations! Please find your certificate attached.
+
+Regards,
+CertFlow</textarea>
+                <p style="margin-top:4px; font-size:12px; color:var(--text-muted);">Use <code>{name}</code> and <code>{department}</code> as placeholders.</p>
+            </div>
+
+            <!-- Email Attachment Mode Switcher -->
+            <div class="control-group" style="margin-top:16px;">
+                <label style="font-weight:600; margin-bottom:8px; display:block;">Attachment Mode</label>
+                <div class="mode-toggle-group" id="emailModeToggle">
+                    <button type="button" class="mode-toggle-btn active" data-mode="cert" id="modeCertBtn">
+                        <span>🎓</span> Automated Certificates
+                    </button>
+                    <button type="button" class="mode-toggle-btn" data-mode="zip" id="modeZipBtn">
+                        <span>📦</span> Custom ZIP / QR Codes
+                    </button>
+                    <button type="button" class="mode-toggle-btn" data-mode="both" id="modeBothBtn">
+                        <span>🎓+📦</span> Both (Cert + ZIP)
+                    </button>
+                </div>
+            </div>
+
+            <!-- Cert Attachment Options -->
+            <div id="certAttachmentSection" class="controls" style="margin-top:14px;">
+                <div class="control-group">
+                    <label>Certificate Format</label>
+                    <select id="emailAttachFormat">
+                        <option value="same">Same as template image</option>
+                        <option value="png">PNG</option>
+                        <option value="jpg">JPG</option>
+                        <option value="pdf">PDF</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- ZIP Attachment Options -->
+            <div id="zipAttachmentSection" class="controls" style="margin-top:14px; display:none;">
+                <div class="control-group" style="grid-column: 1 / -1;">
+                    <label>Participant Files ZIP <span class="hint">(one file per participant row, e.g. QR codes / passes / files)</span></label>
+                    <div class="upload-area" id="attachmentsZipUpload" style="padding: 14px; margin-top:6px;">
+                        <span class="upload-icon" style="font-size:18px;">📦</span>
+                        <p>Click or drag a ZIP file here</p>
+                        <p class="hint">Files are matched to participants in alphabetical order</p>
+                        <input type="file" id="attachmentsZipFile" accept=".zip,application/zip">
+                    </div>
+                    <div id="attachmentsZipStatus" style="font-size:13px; margin-top:6px;"></div>
+                </div>
+            </div>
+
+            <button class="btn btn-primary" id="sendBtn" style="margin-top:14px;" disabled>Send Automated Certificates via Email</button>
+
+            <!-- Live send log -->
+            <div id="sendProgress" style="display:none; margin-top:16px;">
+                <div class="progress-label" id="sendStatus">Connecting...</div>
+                <div class="progress-track" style="margin-bottom:12px;">
+                    <div class="progress-fill" id="sendFill"></div>
+                </div>
+                <div class="send-log" id="sendLog"></div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        let templateImage = null;
+        let participants  = [];
+        let csvParticipants = [];
+        let attachmentsZipData = null;
+
+        // ── Template upload ───────────────────────────────────────────────────
+        const templateUpload = document.getElementById('templateUpload');
+        const templateFile   = document.getElementById('templateFile');
+        const ALLOWED_TYPES  = ['image/png','image/jpeg','image/webp','image/bmp','image/tiff','image/gif'];
+
+        templateUpload.addEventListener('click', () => templateFile.click());
+        templateUpload.addEventListener('dragover', e => { e.preventDefault(); templateUpload.classList.add('dragover'); });
+        templateUpload.addEventListener('dragleave', () => templateUpload.classList.remove('dragover'));
+        templateUpload.addEventListener('drop', e => {
+            e.preventDefault(); templateUpload.classList.remove('dragover');
+            const f = e.dataTransfer.files[0];
+            if (f && ALLOWED_TYPES.includes(f.type)) loadTemplate(f);
+            else if (f) alert('Unsupported file type.');
+        });
+        function updateSendBtnState() {
+            const list = parseParticipants();
+            const sendBtn = document.getElementById('sendBtn');
+            const previewBtn = document.getElementById('previewBtn');
+            const generateBtn = document.getElementById('generateBtn');
+
+            if (previewBtn) previewBtn.disabled = !(templateImage && list.length > 0);
+            if (generateBtn) generateBtn.disabled = !(templateImage && list.length > 0);
+
+            if (list.length > 0) {
+                sendBtn.disabled = false;
+                if (templateImage && attachmentsZipData) {
+                    sendBtn.textContent = 'Send Certificates + ZIP Attachments via Email';
+                } else if (templateImage) {
+                    sendBtn.textContent = 'Send Certificates via Email';
+                } else if (attachmentsZipData) {
+                    sendBtn.textContent = 'Send Confirmation & ZIP Attachments via Email';
+                } else {
+                    sendBtn.textContent = 'Send Confirmation Emails';
+                }
+            } else {
+                sendBtn.disabled = true;
+                sendBtn.textContent = templateImage ? 'Send Certificates via Email' : 'Send Emails (Add Participants First)';
+            }
+        }
+
+        templateFile.addEventListener('change', e => { if (e.target.files[0]) loadTemplate(e.target.files[0]); });
+
+        function loadTemplate(file) {
+            const reader = new FileReader();
+            reader.onload = e => {
+                templateImage = e.target.result;
+                document.getElementById('templatePreview').innerHTML =
+                    `<img src="${e.target.result}" class="template-preview" alt="Template">`;
+                updateSendBtnState();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        // ── CSV upload ────────────────────────────────────────────────────────
+        const csvUpload = document.getElementById('csvUpload');
+        const csvFile   = document.getElementById('csvFile');
+
+        csvUpload.addEventListener('click', () => csvFile.click());
+        csvUpload.addEventListener('dragover', e => { e.preventDefault(); csvUpload.classList.add('dragover'); });
+        csvUpload.addEventListener('dragleave', () => csvUpload.classList.remove('dragover'));
+        csvUpload.addEventListener('drop', e => {
+            e.preventDefault(); csvUpload.classList.remove('dragover');
+            const f = e.dataTransfer.files[0];
+            if (f && f.name.endsWith('.csv')) loadCSV(f);
+        });
+        csvFile.addEventListener('change', e => { if (e.target.files[0]) loadCSV(e.target.files[0]); });
+
+        async function loadCSV(file) {
+            const fd = new FormData();
+            fd.append('csvFile', file);
+            try {
+                const res    = await fetch('/parse-csv', { method: 'POST', body: fd });
+                const result = await res.json();
+                if (result.success) {
+                    csvParticipants = result.participants;
+                    document.getElementById('csvStatus').style.display = 'block';
+                    document.getElementById('csvCount').textContent   = result.count;
+                    document.getElementById('participantData').value  = '';
+                    updateSendBtnState();
+                } else {
+                    alert('CSV error: ' + result.error);
+                }
+            } catch (err) { alert('Upload error: ' + err.message); }
+        }
+
+        const attachmentsZipUpload = document.getElementById('attachmentsZipUpload');
+        const attachmentsZipFileInput = document.getElementById('attachmentsZipFile');
+
+        attachmentsZipUpload.addEventListener('click', () => attachmentsZipFileInput.click());
+        attachmentsZipUpload.addEventListener('dragover', e => { e.preventDefault(); attachmentsZipUpload.classList.add('dragover'); });
+        attachmentsZipUpload.addEventListener('dragleave', () => attachmentsZipUpload.classList.remove('dragover'));
+        attachmentsZipUpload.addEventListener('drop', e => {
+            e.preventDefault(); attachmentsZipUpload.classList.remove('dragover');
+            const f = e.dataTransfer.files[0];
+            if (f) loadAttachmentsZip(f);
+        });
+
+        attachmentsZipFileInput.addEventListener('change', e => {
+            if (e.target.files[0]) loadAttachmentsZip(e.target.files[0]);
+        });
+
+        function loadAttachmentsZip(f) {
+            const statusEl = document.getElementById('attachmentsZipStatus');
+            if (!f) { attachmentsZipData = null; statusEl.textContent = ''; updateSendBtnState(); return; }
+            const reader = new FileReader();
+            reader.onload = ev => {
+                attachmentsZipData = ev.target.result;
+                const currentParticipants = parseParticipants();
+                attachmentsZipUpload.style.borderColor = 'var(--accent)';
+                statusEl.textContent = `✓ ${f.name} loaded — will match against ${currentParticipants.length} participants (checked again on send).`;
+                statusEl.style.color = 'var(--accent)';
+                updateSendBtnState();
+            };
+            reader.readAsDataURL(f);
+        }
+
+        document.getElementById('participantData').addEventListener('input', updateSendBtnState);
+
+        function parseParticipants() {
+            if (csvParticipants.length > 0) return csvParticipants;
+            const raw = document.getElementById('participantData').value.trim();
+            if (!raw) return [];
+            return raw.split('\n').filter(l => l.trim()).map(line => {
+                const parts = line.split(',').map(p => p.trim());
+                return { name: parts[0] || '', department: parts[1] || '', email: parts[2] || '' };
+            }).filter(p => p.name);
+        }
+
+        function getSettings() {
+            return {
+                nameX: document.getElementById('nameX').value,
+                nameY: document.getElementById('nameY').value,
+                nameFontSize: document.getElementById('nameFontSize').value,
+                nameFont: document.getElementById('nameFont').value,
+                nameColor: document.getElementById('nameColor').value,
+                nameBold: document.getElementById('nameBold').checked,
+                deptX: document.getElementById('deptX').value,
+                deptY: document.getElementById('deptY').value,
+                deptFontSize: document.getElementById('deptFontSize').value,
+                deptFont: document.getElementById('deptFont').value,
+                deptColor: document.getElementById('deptColor').value,
+                deptBold: document.getElementById('deptBold').checked,
+                exportFormat: document.getElementById('exportFormat').value,
+            };
+        }
+
+        // Reset preview button label on setting change
+        ['nameX','nameY','nameFontSize','nameFont','nameColor','nameBold','deptX','deptY','deptFontSize','deptFont','deptColor','deptBold']
+            .forEach(id => document.getElementById(id)?.addEventListener('change', () => {
+                const btn = document.getElementById('previewBtn');
+                if (!btn.disabled) btn.textContent = 'Update Preview';
+            }));
+
+        // ── Preview ───────────────────────────────────────────────────────────
+        document.getElementById('previewBtn').addEventListener('click', async () => {
+            participants = parseParticipants();
+            if (!participants.length) return alert('Add participant data first.');
+            if (!templateImage)       return alert('Upload a certificate template first.');
+            try {
+                const res = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template: templateImage, name: participants[0].name, department: participants[0].department, ...getSettings() })
+                });
+                const result = await res.json();
+                if (result.success) {
+                    document.getElementById('previewImage').src = result.image;
+                    document.getElementById('previewArea').style.display = 'block';
+                    document.getElementById('previewImage').scrollIntoView({ behavior: 'smooth' });
+                    document.getElementById('previewBtn').textContent = 'Preview First Certificate';
+                } else { alert('Preview error: ' + result.error); }
+            } catch (err) { alert('Error: ' + err.message); }
+        });
+
+        // ── Batch download ────────────────────────────────────────────────────
+        document.getElementById('generateBtn').addEventListener('click', async () => {
+            participants = parseParticipants();
+            if (!participants.length) return alert('Add participant data first.');
+            if (!templateImage)       return alert('Upload a certificate template first.');
+
+            const prog   = document.getElementById('downloadProgress');
+            const fill   = document.getElementById('downloadFill');
+            const status = document.getElementById('downloadStatus');
+            const detail = document.getElementById('downloadDetail');
+            const btn    = document.getElementById('generateBtn');
+
+            prog.style.display = 'block';
+            btn.disabled = true;
+            status.textContent = `Generating ${participants.length} certificates...`;
+            fill.style.width   = '40%';
+            detail.textContent = '';
+
+            try {
+                const res = await fetch('/generate-batch', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ template: templateImage, participants, settings: getSettings() })
+                });
+                if (!res.ok) { const e = await res.json(); throw new Error(e.error); }
+
+                fill.style.width = '100%';
+                const exportFmt = document.getElementById('exportFormat').value;
+                const blob  = await res.blob();
+                const url   = URL.createObjectURL(blob);
+                const link  = document.createElement('a');
+                link.href = url;
+                link.download = exportFmt === 'pdf' ? 'certificates.pdf' : 'certificates.zip';
+                link.click(); URL.revokeObjectURL(url);
+
+                status.textContent = `Done — ${participants.length} certificates exported`;
+                if (exportFmt === 'pdf') detail.textContent = 'Saved as a single merged PDF.';
+                else if (exportFmt === 'pdf_each') detail.textContent = `Saved as a ZIP with ${participants.length} individual PDF files.`;
+                else detail.textContent = 'Saved as a ZIP archive.';
+            } catch (err) {
+                status.textContent = 'Export failed';
+                detail.textContent = err.message;
+            } finally { btn.disabled = false; }
+        });
+
+        // ── SMTP provider toggle ──────────────────────────────────────────────
+        function onProviderChange() {
+            const custom = document.getElementById('smtpProvider').value === 'custom';
+            document.getElementById('smtpHostGroup').style.display = custom ? '' : 'none';
+            document.getElementById('smtpPortGroup').style.display = custom ? '' : 'none';
+        }
+
+        // ── Test SMTP connection ──────────────────────────────────────────────
+        document.getElementById('testSmtpBtn').addEventListener('click', async () => {
+            const btn    = document.getElementById('testSmtpBtn');
+            const result = document.getElementById('testSmtpResult');
+            btn.disabled = true;
+            result.textContent = '⏳ Testing...';
+            result.style.color = 'var(--text-muted)';
+            try {
+                const res  = await fetch('/test-smtp', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        smtpProvider: document.getElementById('smtpProvider').value,
+                        smtpHost:     document.getElementById('smtpHost').value,
+                        smtpPort:     document.getElementById('smtpPort').value,
+                        smtpUser:     document.getElementById('smtpUser').value,
+                        smtpPass:     document.getElementById('smtpPass').value,
+                    })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    result.textContent = '✅ ' + data.message;
+                    result.style.color = '#4caf50';
+                } else {
+                    result.textContent = '❌ ' + data.error;
+                    result.style.color = '#f44336';
+                }
+            } catch (err) {
+                result.textContent = '❌ ' + err.message;
+                result.style.color = '#f44336';
+            } finally { btn.disabled = false; }
+        });
+
+        document.getElementById('sendBtn').addEventListener('click', async () => {
+            participants = parseParticipants();
+            if (!participants.length) return alert('Add participant data first.');
+
+            const withEmail = participants.filter(p => p.email);
+            if (!withEmail.length) return alert('No participants have an email address. Add an Email column to your CSV or manual input.');
+
+            const sendProgress = document.getElementById('sendProgress');
+            const sendFill     = document.getElementById('sendFill');
+            const sendStatus   = document.getElementById('sendStatus');
+            const sendLog      = document.getElementById('sendLog');
+            const btn          = document.getElementById('sendBtn');
+
+            sendProgress.style.display = 'block';
+            sendLog.innerHTML = '';
+            sendFill.style.width = '0%';
+            sendStatus.textContent = 'Connecting to mail server...';
+            btn.disabled = true;
+
+            const payload = {
+                template:          templateImage,
+                participants,
+                settings:          getSettings(),
+                attachmentsZip:    attachmentsZipData,
+                smtpProvider:      document.getElementById('smtpProvider').value,
+                smtpHost:          document.getElementById('smtpHost').value,
+                smtpPort:          document.getElementById('smtpPort').value,
+                smtpUser:          document.getElementById('smtpUser').value,
+                smtpPass:          document.getElementById('smtpPass').value,
+                fromName:          document.getElementById('fromName').value,
+                emailSubject:      document.getElementById('emailSubject').value,
+                emailBody:         document.getElementById('emailBody').value,
+                emailAttachFormat: document.getElementById('emailAttachFormat').value,
+            };
+
+            try {
+                const res = await fetch('/send-certificates', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+
+                const reader  = res.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let sent = 0, total = withEmail.length;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, { stream: true });
+
+                    // Robust SSE parse: split on double-newline boundary
+                    let boundary;
+                    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+                        const chunk = buffer.slice(0, boundary).trim();
+                        buffer = buffer.slice(boundary + 2);
+                        if (!chunk.startsWith('data: ')) continue;
+                        let evt;
+                        try { evt = JSON.parse(chunk.slice(6)); } catch { continue; }
+
+                        if (evt.type === 'status') {
+                            sendStatus.textContent = evt.message;
+                        } else if (evt.type === 'progress') {
+                            sendStatus.textContent = evt.message;
+                            if (evt.total > 0) {
+                                sendFill.style.width = Math.max(5, Math.round(((evt.index - 0.5) / evt.total) * 100)) + '%';
+                            }
+                        } else if (evt.type === 'error') {
+                            sendStatus.textContent = 'Connection failed';
+                            appendLog(sendLog, '\u274c ' + evt.message, 'log-error');
+                        } else if (evt.type === 'sent') {
+                            sent++;
+                            sendFill.style.width = Math.round((sent / total) * 100) + '%';
+                            sendStatus.textContent = `Sent ${sent} / ${total}`;
+                            appendLog(sendLog, `\u2713 ${evt.name} \u2192 ${evt.email}`, 'log-success');
+                        } else if (evt.type === 'failed') {
+                            appendLog(sendLog, `\u2717 ${evt.name} \u2014 ${evt.reason}`, 'log-error');
+                        } else if (evt.type === 'skip') {
+                            appendLog(sendLog, `\u2014 ${evt.name} (no email, skipped)`, 'log-muted');
+                        } else if (evt.type === 'done') {
+                            sendFill.style.width = '100%';
+                            sendStatus.textContent = `Done \u2014 ${evt.sent} sent, ${evt.failed} failed, ${evt.skipped} skipped`;
+                        }
+                    }
+                }
+            } catch (err) {
+                sendStatus.textContent = 'Error: ' + err.message;
+            } finally { btn.disabled = false; }
+        });
+
+        function appendLog(container, text, cls) {
+            const div = document.createElement('div');
+            div.className = 'log-entry ' + (cls || '');
+            div.textContent = text;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+        }
+    </script>
+</body>
+</html>
