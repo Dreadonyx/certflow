@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sign in — CertFlow</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <main class="container" style="max-width:480px;padding-top:10vh">
+    <div class="header"><div class="brand"><span class="brand-icon">⬡</span><span class="brand-name">CertFlow</span></div><p class="tagline">Sign in to your account</p></div>
+    <section class="section">
+      {% if error %}<div class="alert alert-error">{{ error }}</div>{% endif %}
+      <form method="post" action="{{ url_for('login') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="control-group"><label for="username">Username</label><input id="username" name="username" autocomplete="username" required maxlength="80"></div>
+        <div class="control-group" style="margin-top:12px"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required></div>
+        <button class="btn btn-primary" type="submit" style="margin-top:18px;width:100%">Sign in</button>
+      </form>
+      <p style="margin-top:16px;text-align:center;font-size:13px;color:var(--text-secondary)">
+        Don't have an account? <a href="{{ url_for('signup') }}" style="color:var(--primary);text-decoration:none;font-weight:500">Create one</a>
+      </p>
+    </section>
+  </main>
+</body>
+</html>

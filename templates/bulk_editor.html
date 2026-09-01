@@ -3,8 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>Bulk Certificate Editor - CertFlow</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>window.csrfToken={{ csrf_token|tojson }};const _fetch=window.fetch;window.fetch=(u,o={})=>{o.headers=new Headers(o.headers||{});o.headers.set('X-CSRFToken',window.csrfToken);return _fetch(u,o)};</script>
     <script src="{{ url_for('static', filename='bulk_editor.js') }}" defer></script>
 </head>
 <body>
@@ -19,6 +21,7 @@
                 <nav class="nav-links" aria-label="Primary">
                     <a class="nav-link" href="/">Generator</a>
                     <a class="nav-link active" href="/bulk-editor">Bulk Certificate Editor</a>
+                    <form method="post" action="/logout" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="nav-link" type="submit" style="border:0;background:none;cursor:pointer">Log out</button></form>
                 </nav>
             </div>
             <p class="tagline">Apply the same visual edit to many certificate images.</p>

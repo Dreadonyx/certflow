@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, send_file, jsonify, Response, stream_with_context
+from flask import Flask, render_template, request, send_file, jsonify, Response, stream_with_context, session, redirect, url_for, abort, g
 from PIL import Image, ImageDraw, ImageFont
 from werkzeug.utils import secure_filename
 import io
@@ -9,15 +9,143 @@ import zipfile
 import smtplib
 import ssl
 import json
+import re
+import secrets
+import logging
+import time
+import tempfile
+import shutil
+import sqlite3
+import urllib.request
+import urllib.error
+from functools import wraps
+from email.utils import parseaddr
+from argon2 import PasswordHasher
+from argon2.exceptions import VerifyMismatchError, VerificationError
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
-app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 128 * 1024 * 1024  # 128MB max
-app.config['UPLOAD_FOLDER'] = 'uploads'
+Image.MAX_IMAGE_PIXELS = int(os.environ.get('MAX_IMAGE_PIXELS', '25000000'))
 
-os.makedirs('uploads', exist_ok=True)
+app = Flask(__name__)
+app.config.update(
+    SECRET_KEY=os.environ.get('SECRET_KEY', 'dev-only-change-me'),
+    MAX_CONTENT_LENGTH=int(os.environ.get('MAX_REQUEST_BYTES', 128 * 1024 * 1024)),
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE=os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax'),
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', '').lower() in ('1', 'true', 'yes') or os.environ.get('FLASK_ENV') == 'production',
+    PERMANENT_SESSION_LIFETIME=int(os.environ.get('SESSION_LIFETIME_SECONDS', 8 * 3600)),
+)
+app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', os.path.join(tempfile.gettempdir(), 'certflow-uploads'))
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# ── SQLite user database ───────────────────────────────────────────────────────
+DB_PATH = os.environ.get('DB_PATH', os.path.join(os.path.dirname(__file__), 'certflow_users.db'))
+
+def get_db():
+    """Return a thread-local SQLite connection."""
+    db = getattr(g, '_database', None)
+    if db is None:
+        db = g._database = sqlite3.connect(DB_PATH)
+        db.row_factory = sqlite3.Row
+    return db
+
+@app.teardown_appcontext
+def close_db(exc):
+    db = getattr(g, '_database', None)
+    if db is not None:
+        db.close()
+
+def init_db():
+    """Create the users table if it doesn't exist."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+                pw_hash  TEXT    NOT NULL,
+                created  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            )
+        """)
+        conn.commit()
+
+init_db()
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+logging.basicConfig(level=os.environ.get('LOG_LEVEL', 'INFO'), format='%(asctime)s %(levelname)s %(name)s %(message)s')
+logger = logging.getLogger('certflow')
+password_hasher = PasswordHasher()
+limiter = Limiter(key_func=get_remote_address, app=app, default_limits=[os.environ.get('GLOBAL_RATE_LIMIT', '300 per hour')], storage_uri=os.environ.get('RATELIMIT_STORAGE_URI', 'memory://'))
+
+MAX_CSV_ROWS = int(os.environ.get('MAX_CSV_ROWS', '5000'))
+MAX_PARTICIPANTS = int(os.environ.get('MAX_PARTICIPANTS', '5000'))
+MAX_IMAGE_BYTES = int(os.environ.get('MAX_IMAGE_BYTES', str(32 * 1024 * 1024)))
+MAX_IMAGE_PIXELS = int(os.environ.get('MAX_IMAGE_PIXELS', '25000000'))
+MAX_ZIP_ENTRIES = int(os.environ.get('MAX_ZIP_ENTRIES', '500'))
+MAX_ZIP_UNCOMPRESSED = int(os.environ.get('MAX_ZIP_UNCOMPRESSED', str(256 * 1024 * 1024)))
+MAX_NAME_LENGTH = int(os.environ.get('MAX_NAME_LENGTH', '200'))
+MAX_DEPARTMENT_LENGTH = int(os.environ.get('MAX_DEPARTMENT_LENGTH', '200'))
+EMAIL_RE = re.compile(r'^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$')
+USERNAME_RE = re.compile(r'^[A-Za-z0-9._-]{3,40}$')
+
+if os.environ.get('FLASK_ENV') == 'production' and app.config['SECRET_KEY'] == 'dev-only-change-me':
+    raise RuntimeError('SECRET_KEY must be set in production')
+
+
+def db_get_user(username):
+    """Fetch a user row by username (case-insensitive)."""
+    row = get_db().execute(
+        'SELECT * FROM users WHERE username = ? COLLATE NOCASE', (username,)
+    ).fetchone()
+    return row
+
+
+def db_create_user(username, password):
+    """Hash password and insert a new user. Returns True on success, False if username taken."""
+    pw_hash = password_hasher.hash(password)
+    try:
+        get_db().execute(
+            'INSERT INTO users (username, pw_hash) VALUES (?, ?)', (username, pw_hash)
+        )
+        get_db().commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+
+
+def verify_user_password(username, password):
+    """Check password against DB user, then fall back to env-var admin."""
+    password_value = str(password or '')
+
+    # 1. Check SQLite users table
+    row = db_get_user(username)
+    if row:
+        try:
+            password_hasher.verify(row['pw_hash'], password_value)
+            return True
+        except (VerifyMismatchError, VerificationError, ValueError):
+            return False
+
+    # 2. Fallback: env-var admin (keeps backward compat)
+    admin_username = os.environ.get('ADMIN_USERNAME', 'admin')
+    if not secrets.compare_digest(username, admin_username):
+        return False
+    configured_hash = os.environ.get('ADMIN_PASSWORD_HASH')
+    if configured_hash:
+        try:
+            password_hasher.verify(configured_hash, password_value)
+            return True
+        except (VerifyMismatchError, VerificationError, ValueError):
+            return False
+    configured_password = os.environ.get('ADMIN_PASSWORD')
+    if configured_password:
+        return secrets.compare_digest(str(configured_password), password_value)
+
+    return False
 
 FONT_MAP = {
     'arial.ttf':   {'regular': '/usr/share/fonts/noto/NotoSans-Regular.ttf', 'bold': '/usr/share/fonts/noto/NotoSans-Bold.ttf'},
@@ -62,6 +190,93 @@ EMAIL_ATTACH_FORMATS = {
 }
 
 
+def csrf_token():
+    token = session.get('_csrf_token')
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session['_csrf_token'] = token
+    return token
+
+
+def require_csrf():
+    supplied = request.headers.get('X-CSRFToken') or request.form.get('csrf_token')
+    expected = session.get('_csrf_token')
+    if not expected or not supplied or not secrets.compare_digest(str(supplied), str(expected)):
+        abort(403, description='Invalid CSRF token')
+
+
+def login_required(view):
+    @wraps(view)
+    def wrapped(*args, **kwargs):
+        if not session.get('authenticated'):
+            if request.accept_mimetypes.accept_json and not request.accept_mimetypes.accept_html:
+                return jsonify({'success': False, 'error': 'Authentication required'}), 401
+            return redirect(url_for('login', next=request.path))
+        session.permanent = True
+        return view(*args, **kwargs)
+    return wrapped
+
+
+def validate_email(value):
+    value = (value or '').strip()
+    if not value or len(value) > 254 or not EMAIL_RE.fullmatch(value):
+        return None
+    local, domain = value.rsplit('@', 1)
+    if len(local) > 64 or '..' in value:
+        return None
+    return value
+
+
+def safe_filename(value, fallback='certificate'):
+    value = re.sub(r'[^A-Za-z0-9._-]+', '_', str(value or ''))[:100].strip('._')
+    return value or fallback
+
+
+def validate_participants(participants):
+    if not isinstance(participants, list) or len(participants) > MAX_PARTICIPANTS:
+        raise ValueError(f'At most {MAX_PARTICIPANTS} participants are allowed per request.')
+    cleaned = []
+    errors = []
+    for index, p in enumerate(participants, 1):
+        if not isinstance(p, dict):
+            errors.append(f'Row {index}: invalid participant')
+            continue
+        name = str(p.get('string1') or p.get('name') or '').strip()
+        department = str(p.get('string2') or p.get('department') or '').strip()
+        email = str(p.get('email') or '').strip()
+        if not name:
+            errors.append(f'Row {index}: name is required')
+            continue
+        if len(name) > MAX_NAME_LENGTH or len(department) > MAX_DEPARTMENT_LENGTH:
+            errors.append(f'Row {index}: text is too long')
+            continue
+        if email and not validate_email(email):
+            errors.append(f'Row {index}: invalid email address')
+        cleaned.append({'string1': name, 'string2': department, 'name': name, 'department': department, 'email': validate_email(email) or ''})
+    if errors:
+        raise ValueError('; '.join(errors[:10]))
+    return cleaned
+
+
+def validate_settings(settings, width=None, height=None):
+    if not isinstance(settings, dict):
+        return {}
+    allowed_fonts = set(FONT_MAP)
+    out = dict(settings)
+    for key in ('nameX', 'nameY', 'deptX', 'deptY'):
+        limit = max(width or 10000, height or 10000)
+        try: out[key] = max(-limit, min(limit, int(float(settings.get(key, 0)))) )
+        except (TypeError, ValueError): out[key] = 0
+    for key in ('nameFontSize', 'deptFontSize'):
+        try: out[key] = max(1, min(400, int(float(settings.get(key, 32)))))
+        except (TypeError, ValueError): out[key] = 32
+    for key in ('nameFont', 'deptFont'):
+        if out.get(key) not in allowed_fonts: out[key] = 'arial.ttf'
+    for key in ('nameColor', 'deptColor'):
+        if not isinstance(out.get(key), str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', out[key]): out[key] = '#000000'
+    return out
+
+
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
 def hex_to_rgb(hex_color):
@@ -90,10 +305,30 @@ def load_font(font_family, size, is_bold=False):
 
 def decode_template(template_data):
     """Decode base64 data-URL → (PIL Image, pil_format, extension)."""
+    if not isinstance(template_data, str) or len(template_data) > MAX_IMAGE_BYTES * 2:
+        raise ValueError('Template is missing or exceeds the upload limit.')
+    if ',' not in template_data:
+        raise ValueError('Invalid template data.')
     header, raw = template_data.split(',', 1)
     mime = header.split(':')[1].split(';')[0].lower()
+    if mime not in IMAGE_FORMATS:
+        raise ValueError('Unsupported template image format.')
+    try:
+        decoded = base64.b64decode(raw, validate=True)
+    except Exception as exc:
+        raise ValueError('Invalid template encoding.') from exc
+    if len(decoded) > MAX_IMAGE_BYTES:
+        raise ValueError('Template exceeds the upload limit.')
     pil_format, ext = IMAGE_FORMATS.get(mime, ('PNG', 'png'))
-    image = Image.open(io.BytesIO(base64.b64decode(raw)))
+    try:
+        image = Image.open(io.BytesIO(decoded))
+        image.verify()
+        image = Image.open(io.BytesIO(decoded))
+        image.load()
+    except Exception as exc:
+        raise ValueError('Template is not a valid image.') from exc
+    if image.width * image.height > MAX_IMAGE_PIXELS:
+        raise ValueError('Template dimensions are too large.')
     if pil_format == 'JPEG' and image.mode in ('RGBA', 'P'):
         image = image.convert('RGB')
     return image, pil_format, ext
@@ -139,9 +374,17 @@ def extract_zip_attachments(b64_zip_data):
     zip_bytes = base64.b64decode(raw)
     files = []
     with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        if len(zf.infolist()) > MAX_ZIP_ENTRIES:
+            raise ValueError('ZIP contains too many files.')
+        total_size = 0
         for member in zf.infolist():
             if member.is_dir():
                 continue
+            if os.path.isabs(member.filename) or '..' in member.filename.replace('\\', '/').split('/'):
+                raise ValueError('ZIP contains an unsafe path.')
+            total_size += member.file_size
+            if total_size > MAX_ZIP_UNCOMPRESSED:
+                raise ValueError('ZIP expands beyond the allowed size.')
             # skip junk entries like __MACOSX or .DS_Store
             base = os.path.basename(member.filename)
             if not base or base.startswith('.') or '__MACOSX' in member.filename:
@@ -202,6 +445,8 @@ def is_zip_upload(upload):
 
 
 def iter_bulk_upload_images(files):
+    count = 0
+    total_size = 0
     for upload in files:
         if not upload or not upload.filename:
             continue
@@ -213,24 +458,36 @@ def iter_bulk_upload_images(files):
                 raise ValueError(f'{upload.filename} is not a valid ZIP archive.')
 
             with archive:
+                if len(archive.infolist()) > MAX_ZIP_ENTRIES:
+                    raise ValueError('ZIP contains too many files.')
                 for member in archive.infolist():
                     if member.is_dir():
                         continue
                     member_ext = os.path.splitext(member.filename)[1].lower()
                     if member_ext not in BULK_IMAGE_EXTENSIONS:
                         continue
+                    if os.path.isabs(member.filename) or '..' in member.filename.replace('\\', '/').split('/') or member.file_size > MAX_IMAGE_BYTES:
+                        raise ValueError('ZIP contains an unsafe or oversized image.')
+                    total_size += member.file_size
+                    if total_size > MAX_ZIP_UNCOMPRESSED:
+                        raise ValueError('ZIP expands beyond the allowed size.')
                     with archive.open(member) as image_stream:
                         image, pil_format, ext = decode_bulk_image_stream(
                             image_stream,
                             f'{upload.filename}/{member.filename}',
                         )
                     yield member.filename, image, pil_format, ext
+                    count += 1
+                    if count > MAX_PARTICIPANTS:
+                        raise ValueError(f'At most {MAX_PARTICIPANTS} images are allowed.')
             continue
 
         upload_ext = os.path.splitext(upload.filename)[1].lower()
         if upload_ext not in BULK_IMAGE_EXTENSIONS:
             raise ValueError(f'{upload.filename} is not supported. Upload PNG, JPG, or ZIP files.')
 
+        if upload.content_length and upload.content_length > MAX_IMAGE_BYTES:
+            raise ValueError('Image exceeds the upload limit.')
         image, pil_format, ext = decode_bulk_image_stream(upload.stream, upload.filename)
         yield upload.filename, image, pil_format, ext
 
@@ -297,53 +554,192 @@ def apply_bulk_actions(image, raw_actions):
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route('/')
+@login_required
 def index():
-    return render_template('index.html')
+    return render_template('index.html', csrf_token=csrf_token())
 
 
 @app.route('/bulk-editor')
+@login_required
 def bulk_editor():
-    return render_template('bulk_editor.html')
+    return render_template('bulk_editor.html', csrf_token=csrf_token())
+
+
+@app.route('/login', methods=['GET', 'POST'])
+@limiter.limit(os.environ.get('LOGIN_RATE_LIMIT', '5 per minute'), methods=['POST'])
+def login():
+    if request.method == 'GET':
+        if session.get('authenticated'):
+            return redirect(url_for('index'))
+        return render_template('login.html', csrf_token=csrf_token())
+    require_csrf()
+    username = (request.form.get('username') or '').strip()
+    password = request.form.get('password') or ''
+    if not username or not verify_user_password(username, password):
+        logger.warning('Failed login attempt for "%s" from %s', username, get_remote_address())
+        return render_template('login.html', csrf_token=csrf_token(), error='Invalid username or password.'), 401
+    session.clear()
+    session.permanent = True
+    session['authenticated'] = True
+    session['username'] = username
+    session['_csrf_token'] = secrets.token_urlsafe(32)
+    logger.info('Successful login for "%s" from %s', username, get_remote_address())
+    next_url = request.args.get('next', '')
+    if next_url.startswith('/') and not next_url.startswith('//'):
+        return redirect(next_url)
+    return redirect(url_for('index'))
+
+
+@app.route('/signup', methods=['GET', 'POST'])
+@limiter.limit('10 per hour', methods=['POST'])
+def signup():
+    if request.method == 'GET':
+        if session.get('authenticated'):
+            return redirect(url_for('index'))
+        return render_template('signup.html', csrf_token=csrf_token())
+    require_csrf()
+    username = (request.form.get('username') or '').strip()
+    password = request.form.get('password') or ''
+    confirm  = request.form.get('confirm_password') or ''
+
+    # Validate username
+    if not USERNAME_RE.fullmatch(username):
+        return render_template('signup.html', csrf_token=csrf_token(),
+            error='Username must be 3–40 characters: letters, numbers, dots, hyphens, underscores only.'), 422
+    # Validate password strength
+    if len(password) < 8:
+        return render_template('signup.html', csrf_token=csrf_token(),
+            error='Password must be at least 8 characters.'), 422
+    if password != confirm:
+        return render_template('signup.html', csrf_token=csrf_token(),
+            error='Passwords do not match.'), 422
+
+    if not db_create_user(username, password):
+        return render_template('signup.html', csrf_token=csrf_token(),
+            error='Username already taken. Please choose another.'), 409
+
+    logger.info('New user registered: "%s" from %s', username, get_remote_address())
+    # Auto-login after signup
+    session.clear()
+    session.permanent = True
+    session['authenticated'] = True
+    session['username'] = username
+    session['_csrf_token'] = secrets.token_urlsafe(32)
+    return redirect(url_for('index'))
+
+
+@app.route('/logout', methods=['POST'])
+@login_required
+@limiter.limit('20 per minute')
+def logout():
+    require_csrf()
+    session.clear()
+    return redirect(url_for('login'))
+
+
+@app.route('/health')
+def health():
+    return jsonify({'status': 'ok'}), 200
+
+
+@app.after_request
+def add_security_headers(response):
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    response.headers.setdefault('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
+    response.headers.setdefault('Content-Security-Policy', "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    if app.config['SESSION_COOKIE_SECURE']:
+        response.headers.setdefault('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    return response
+
+
+@app.errorhandler(413)
+def request_too_large(_error):
+    return jsonify({'success': False, 'error': 'Upload is too large.'}), 413
+
+
+@app.errorhandler(429)
+def too_many_requests(_error):
+    return jsonify({'success': False, 'error': 'Too many requests. Please try again later.'}), 429
+
+
+@app.errorhandler(400)
+def bad_request(error):
+    return jsonify({'success': False, 'error': getattr(error, 'description', 'Invalid request.')}), 400
+
+
+@app.errorhandler(403)
+def forbidden(error):
+    return jsonify({'success': False, 'error': getattr(error, 'description', 'Forbidden.')}), 403
+
+
+@app.errorhandler(404)
+def not_found(_error):
+    return jsonify({'success': False, 'error': 'Not found.'}), 404
+
+
+@app.errorhandler(Exception)
+def unhandled_error(error):
+    logger.exception('Unhandled application error: %s', error)
+    return jsonify({'success': False, 'error': 'An unexpected server error occurred.'}), 500
 
 
 @app.route('/parse-csv', methods=['POST'])
+@login_required
+@limiter.limit('30 per minute')
 def parse_csv():
     """Parse CSV → [{string1, string2, email}, …]"""
     try:
         if 'csvFile' not in request.files or request.files['csvFile'].filename == '':
             return jsonify({'success': False, 'error': 'No file uploaded'}), 400
 
-        stream = io.StringIO(request.files['csvFile'].stream.read().decode('UTF8'), newline=None)
+        require_csrf()
+        raw = request.files['csvFile'].stream.read(MAX_IMAGE_BYTES)
+        if len(raw) >= MAX_IMAGE_BYTES:
+            return jsonify({'success': False, 'error': 'CSV exceeds the upload limit'}), 413
+        stream = io.StringIO(raw.decode('utf-8-sig'), newline=None)
         rows = list(csv.reader(stream))
+        if len(rows) > MAX_CSV_ROWS + 1:
+            return jsonify({'success': False, 'error': f'Maximum {MAX_CSV_ROWS} CSV rows allowed'}), 413
 
         # Auto-detect header row
         if rows and rows[0] and rows[0][0].strip().lower() in ('name', 'participant', 'string1', 'string 1', 'str1'):
             rows = rows[1:]
 
         participants = []
+        errors = []
         for row in rows:
             if row and row[0].strip():
                 str1 = row[0].strip()
                 str2 = row[1].strip() if len(row) > 1 else ''
                 email = row[2].strip() if len(row) > 2 else ''
+                email_value = row[2].strip() if len(row) > 2 else ''
+                if email_value and not validate_email(email_value):
+                    errors.append(f'Row {len(participants) + 1}: invalid email address')
+                    continue
                 participants.append({
                     'string1':    str1,
                     'string2':    str2,
                     'name':       str1,
                     'department': str2,
-                    'email':      email,
+                    'email':      email_value,
                 })
-
-        return jsonify({'success': True, 'participants': participants, 'count': len(participants)})
+        if errors:
+            return jsonify({'success': False, 'error': '; '.join(errors[:10])}), 400
+        return jsonify({'success': True, 'participants': validate_participants(participants), 'count': len(participants)})
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
 
 
 @app.route('/bulk-editor/process', methods=['POST'])
+@login_required
+@limiter.limit('10 per minute')
 def process_bulk_editor_batch():
     """Apply visual edits to uploaded PNG/JPG certificates and return a ZIP."""
     try:
+        require_csrf()
         files = request.files.getlist('certificates')
         if not files:
             return jsonify({'success': False, 'error': 'Upload at least one certificate image.'}), 400
@@ -386,14 +782,19 @@ def process_bulk_editor_batch():
 
 
 @app.route('/generate', methods=['POST'])
+@login_required
+@limiter.limit('60 per minute')
 def generate_certificate():
     """Generate a single certificate (for preview). Returns base64 image."""
     try:
+        require_csrf()
         data = request.json
         template_image, pil_format, ext = decode_template(data['template'])
         str1 = data.get('string1') or data.get('name', '')
         str2 = data.get('string2') or data.get('department', '')
-        cert = draw_certificate(template_image, str1, str2, data)
+        participants = validate_participants([{'name': str1, 'department': str2}])
+        settings = validate_settings(data, template_image.width, template_image.height)
+        cert = draw_certificate(template_image, participants[0]['name'], participants[0]['department'], settings)
         img_bytes = image_to_bytes(cert, pil_format)
         mime = 'image/jpeg' if ext == 'jpg' else f'image/{ext}'
         return jsonify({
@@ -406,13 +807,16 @@ def generate_certificate():
 
 
 @app.route('/generate-batch', methods=['POST'])
+@login_required
+@limiter.limit('10 per minute')
 def generate_batch():
     """Batch generate → merged PDF, individual PDFs ZIP, or image ZIP depending on exportFormat."""
     try:
+        require_csrf()
         data = request.json
         template_image, default_fmt, default_ext = decode_template(data['template'])
-        participants = data.get('participants', [])
-        settings = data.get('settings', {})
+        participants = validate_participants(data.get('participants', []))
+        settings = validate_settings(data.get('settings', {}), template_image.width, template_image.height)
 
         export_fmt = settings.get('exportFormat', 'same')
         pil_format, ext = EXPORT_FORMAT_MAP.get(export_fmt, (default_fmt, default_ext))
@@ -443,10 +847,11 @@ def generate_batch():
         # ── Individual PDFs in ZIP ────────────────────────────────────────────
         if export_fmt == 'pdf_each':
             with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-                for p, c in zip(participants, certs):
+                for idx, (p, c) in enumerate(zip(participants, certs), start=1):
+                    p_name = p.get('string1') or p.get('name') or f'certificate_{idx}'
                     pdf_buf = io.BytesIO()
                     c.save(pdf_buf, 'PDF')
-                    filename = f"{p['name'].replace(' ', '_')}_certificate.pdf"
+                    filename = f"{safe_filename(p_name)}_certificate.pdf"
                     zf.writestr(filename, pdf_buf.getvalue())
             buf.seek(0)
             return send_file(
@@ -458,9 +863,10 @@ def generate_batch():
 
         # ── Image formats (PNG / JPG / WebP / same-as-template) in ZIP ───────
         with zipfile.ZipFile(buf, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for p, c in zip(participants, certs):
+            for idx, (p, c) in enumerate(zip(participants, certs), start=1):
+                p_name = p.get('string1') or p.get('name') or f'certificate_{idx}'
                 zf.writestr(
-                    f"{p['name'].replace(' ', '_')}_certificate.{ext}",
+                    f"{safe_filename(p_name)}_certificate.{ext}",
                     image_to_bytes(c, pil_format),
                 )
         buf.seek(0)
@@ -488,41 +894,90 @@ def _make_smtp_connection(smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass)
     return server
 
 
-@app.route('/test-smtp', methods=['POST'])
-def test_smtp():
-    """Quick SMTP credential check — does not send any email."""
-    try:
-        data = request.json or {}
-        provider = data.get('smtpProvider', 'custom')
-        if provider in SMTP_PRESETS:
-            smtp_host, smtp_port, smtp_mode = SMTP_PRESETS[provider]
+class EmailService:
+    """Provider abstraction; credentials are read only from server environment."""
+    def __init__(self):
+        self.provider = os.environ.get('EMAIL_PROVIDER', 'disabled').lower()
+        self.sender = os.environ.get('EMAIL_FROM', '').strip()
+        self.reply_to = os.environ.get('EMAIL_REPLY_TO', '').strip()
+        self.host = os.environ.get('EMAIL_SMTP_HOST', '').strip()
+        self.port = int(os.environ.get('EMAIL_SMTP_PORT', '587'))
+        self.user = os.environ.get('EMAIL_SMTP_USER', '').strip()
+        self.password = os.environ.get('EMAIL_SMTP_PASSWORD', '')
+        self.api_key = os.environ.get('EMAIL_API_KEY', '')
+        self.server = None
+
+    def connect(self):
+        if self.provider == 'smtp':
+            if not all((self.sender, self.host, self.user, self.password)):
+                raise RuntimeError('Server email provider is not configured.')
+            self.server = _make_smtp_connection(self.host, self.port, 'ssl' if self.port == 465 else 'starttls', self.user, self.password)
+        elif self.provider == 'resend':
+            if not self.sender or not self.api_key:
+                raise RuntimeError('Server email provider is not configured.')
         else:
-            smtp_host = data.get('smtpHost', '').strip()
-            smtp_port = int(data.get('smtpPort', 587) or 587)
-            smtp_mode = 'ssl' if smtp_port == 465 else 'starttls'
+            raise RuntimeError('Email sending is not enabled.')
 
-        smtp_user = (data.get('smtpUser') or '').strip()
-        smtp_pass = (data.get('smtpPass') or '').strip()
+    def send(self, message, recipient):
+        if self.provider == 'smtp':
+            try:
+                self.server.sendmail(self.sender, recipient, message.as_string())
+            except (smtplib.SMTPServerDisconnected, TimeoutError, OSError, smtplib.SMTPException):
+                self.connect()
+                self.server.sendmail(self.sender, recipient, message.as_string())
+            return 'accepted'
+        if self.provider == 'resend':
+            body = {
+                'from': self.sender,
+                'to': [recipient],
+                'subject': message['Subject'],
+                'text': message.get_payload()[0].get_payload(decode=True).decode('utf-8', errors='replace') if message.get_payload() else '',
+            }
+            if self.reply_to:
+                body['reply_to'] = [self.reply_to]
+            req = urllib.request.Request('https://api.resend.com/emails', data=json.dumps(body).encode(), headers={'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json'}, method='POST')
+            try:
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    if response.status not in (200, 201, 202):
+                        raise RuntimeError('Provider rejected message')
+            except urllib.error.HTTPError as exc:
+                if 400 <= exc.code < 500 and exc.code != 429:
+                    raise ValueError('Email provider rejected the recipient or message')
+                raise RuntimeError('Temporary email provider failure')
+            except (urllib.error.URLError, TimeoutError) as exc:
+                raise RuntimeError('Temporary email provider failure') from exc
+            return 'accepted'
+        raise RuntimeError('Email sending is not enabled.')
 
-        if not smtp_host:
-            return jsonify({'success': False, 'error': 'SMTP host is required for Custom SMTP.'}), 400
-        if not smtp_user or not smtp_pass:
-            return jsonify({'success': False, 'error': 'Email and password are required.'}), 400
+    def close(self):
+        if self.server:
+            try: self.server.quit()
+            except Exception: pass
+            self.server = None
 
-        server = _make_smtp_connection(smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass)
-        server.quit()
-        return jsonify({'success': True, 'message': f'Connected to {smtp_host}:{smtp_port} successfully!'})
+
+@app.route('/test-smtp', methods=['POST'])
+@login_required
+@limiter.limit('10 per minute')
+def test_smtp():
+    """Check server-side provider configuration; never accepts credentials from the browser."""
+    try:
+        require_csrf()
+        service = EmailService()
+        service.connect(); service.close()
+        return jsonify({'success': True, 'message': f'{service.provider} provider is configured.'})
     except smtplib.SMTPAuthenticationError:
-        return jsonify({'success': False, 'error': 'Authentication failed. Check your email/password. For Gmail use an App Password.'}), 400
-    except smtplib.SMTPConnectError as e:
-        return jsonify({'success': False, 'error': f'Could not connect to {smtp_host}:{smtp_port}. {e}'}), 400
+        return jsonify({'success': False, 'error': 'Email provider authentication failed.'}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
 
 
 @app.route('/send-certificates', methods=['POST'])
+@login_required
+@limiter.limit('5 per minute')
 def send_certificates():
     """Generate + email each certificate. Streams SSE progress events."""
+    require_csrf()
     data = request.json or {}
 
     has_template = bool(data.get('template'))
@@ -536,8 +991,11 @@ def send_certificates():
             return Response(stream_with_context(_err()), mimetype='text/event-stream',
                             headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
-    participants = data.get('participants', [])
-    settings     = data.get('settings', {})
+    try:
+        participants = validate_participants(data.get('participants', []))
+    except ValueError as exc:
+        return jsonify({'success': False, 'error': str(exc)}), 400
+    settings     = validate_settings(data.get('settings', {}), template_image.width if template_image else None, template_image.height if template_image else None)
 
     # Optional extra attachment ZIP — one file per participant, matched by sheet order
     attachments_zip_data = data.get('attachmentsZip')
@@ -555,18 +1013,8 @@ def send_certificates():
         return Response(stream_with_context(_err()), mimetype='text/event-stream',
                         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
-    # SMTP config
-    provider = data.get('smtpProvider', 'custom')
-    if provider in SMTP_PRESETS:
-        smtp_host, smtp_port, smtp_mode = SMTP_PRESETS[provider]
-    else:
-        smtp_host = (data.get('smtpHost') or '').strip()
-        smtp_port = int(data.get('smtpPort') or 587)
-        smtp_mode = 'ssl' if smtp_port == 465 else 'starttls'
-
-    smtp_user = (data.get('smtpUser') or '').strip()
-    smtp_pass = (data.get('smtpPass') or '').strip()
-    from_name = (data.get('fromName') or 'CertFlow').strip()
+    email_service = EmailService()
+    from_name = os.environ.get('EMAIL_FROM_NAME', 'CertFlow').strip()
     subject   = data.get('emailSubject') or 'Your Certificate'
     body      = data.get('emailBody') or 'Hi {name},\n\nPlease find your certificate attached.\n\nRegards,\nCertFlow'
 
@@ -582,7 +1030,7 @@ def send_certificates():
     def stream():
         results = []
         skipped = 0
-        server  = None
+        service = email_service
 
         try:
             # ── Initial SSE buffer flush for Gunicorn / reverse proxies ───────────
@@ -590,17 +1038,10 @@ def send_certificates():
 
             # ── Connect ──────────────────────────────────────────────────────────
             try:
-                if not smtp_host:
-                    raise ValueError('SMTP host is empty. Select a provider or fill in Custom SMTP host.')
-                if not smtp_user or not smtp_pass:
-                    raise ValueError('Email address and password/app-password are required.')
-                server = _make_smtp_connection(smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass)
+                service.connect()
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Connected to mail server. Preparing emails...'})}\n\n"
-            except smtplib.SMTPAuthenticationError:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Authentication failed. For Gmail, use an App Password (not your regular password).'})}\n\n"
-                return
             except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'message': f'SMTP connection failed: {e}'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': 'Email provider is not configured or unavailable.'})}\n\n"
                 return
 
             total = len([p for p in participants if p.get('email')])
@@ -609,21 +1050,22 @@ def send_certificates():
                 email_addr = (p.get('email') or '').strip()
                 p_str1 = p.get('string1') or p.get('name', '')
                 p_str2 = p.get('string2') or p.get('department', '')
+                p_name = p_str1 or f"Participant {i + 1}"
                 if not email_addr:
                     skipped += 1
-                    yield f"data: {json.dumps({'type': 'skip', 'name': p_str1, 'reason': 'no email'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'skip', 'name': p_name, 'reason': 'no email'})}\n\n"
                     continue
 
                 try:
                     # Live status update before sending payload
-                    progress_msg = f"Sending {i + 1}/{total}: {p_str1} ({email_addr})..."
-                    yield f"data: {json.dumps({'type': 'progress', 'name': p_str1, 'email': email_addr, 'index': i + 1, 'total': total, 'message': progress_msg})}\n\n"
+                    progress_msg = f"Sending {i + 1}/{total}: {p_name} ({email_addr})..."
+                    yield f"data: {json.dumps({'type': 'progress', 'name': p_name, 'email': email_addr, 'index': i + 1, 'total': total, 'message': progress_msg})}\n\n"
 
                     personal_body = body.replace('{string1}', p_str1).replace('{name}', p_str1)\
                                         .replace('{string2}', p_str2).replace('{department}', p_str2)
 
                     msg = MIMEMultipart()
-                    msg['From']    = f'{from_name} <{smtp_user}>'
+                    msg['From']    = f'{from_name} <{service.sender}>'
                     msg['To']      = email_addr
                     msg['Subject'] = subject.replace('{string1}', p_str1).replace('{name}', p_str1)\
                                             .replace('{string2}', p_str2).replace('{department}', p_str2)
@@ -643,7 +1085,7 @@ def send_certificates():
                         else:
                             cert_bytes = image_to_bytes(cert, out_fmt)
 
-                        attach_name = f"{p_str1.replace(' ', '_')}_certificate.{out_ext}"
+                        attach_name = f"{p_name.replace(' ', '_')}_certificate.{out_ext}"
                         attachment = MIMEApplication(cert_bytes, Name=attach_name)
                         attachment['Content-Disposition'] = f'attachment; filename="{attach_name}"'
                         msg.attach(attachment)
@@ -656,15 +1098,7 @@ def send_certificates():
                         extra_part['Content-Disposition'] = f'attachment; filename="{extra_display_name}"'
                         msg.attach(extra_part)
 
-                    # Attempt send; reconnect once on broken pipe or timeout
-                    try:
-                        server.sendmail(smtp_user, email_addr, msg.as_string())
-                    except (smtplib.SMTPServerDisconnected, TimeoutError, OSError, smtplib.SMTPException):
-                        try:
-                            server = _make_smtp_connection(smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass)
-                            server.sendmail(smtp_user, email_addr, msg.as_string())
-                        except Exception as retry_err:
-                            raise retry_err
+                    service.send(msg, email_addr)
 
                     results.append({'name': p_name, 'status': 'sent'})
                     yield f"data: {json.dumps({'type': 'sent', 'name': p_name, 'email': email_addr, 'index': i + 1, 'total': total})}\n\n"
@@ -680,11 +1114,7 @@ def send_certificates():
         except Exception as top_err:
             yield f"data: {json.dumps({'type': 'error', 'message': f'Server error: {top_err}'})}\n\n"
         finally:
-            if server:
-                try:
-                    server.quit()
-                except Exception:
-                    pass
+            service.close()
 
     return Response(stream_with_context(stream()), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
