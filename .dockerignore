@@ -1,0 +1,37 @@
+# Version control
+.git
+.github
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+venv/
+.venv/
+*.egg-info
+
+# Dev / local config
+.env
+.env.*
+!.env.example
+
+# Generated outputs and uploads (runtime data, not part of image)
+output_certs/
+uploads/
+
+# Dev docs / scratch
+*.md
+*.xlsx
+*.csv
+*.ods
+*.jpeg
+*.jpg
+!static/**
+guide.txt
+
+# Secrets / keys
+*.pem
+*.key
+*.crt
