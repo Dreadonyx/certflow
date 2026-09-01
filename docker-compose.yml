@@ -16,7 +16,7 @@ services:
       ADMIN_PASSWORD_HASH: "$$argon2id$$v=19$$m=65536,t=3,p=4$$KWGmoIpwKwAUdSYbCgIGUA$$bgcSv96TZHac5LvK1SDyFARlcewGJeJYzexYR4bs1tQ"
 
       # ── Session / cookie hardening ─────────────────────────────────
-      SESSION_COOKIE_SECURE: "true"
+      SESSION_COOKIE_SECURE: "false"
       SESSION_COOKIE_SAMESITE: Strict
       SESSION_LIFETIME_SECONDS: "28800"   # 8 hours
 
