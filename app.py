@@ -36,7 +36,7 @@ app.config.update(
     MAX_CONTENT_LENGTH=int(os.environ.get('MAX_REQUEST_BYTES', 128 * 1024 * 1024)),
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE=os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax'),
-    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', '').lower() in ('1', 'true', 'yes') or os.environ.get('FLASK_ENV') == 'production',
+    SESSION_COOKIE_SECURE=os.environ.get('SESSION_COOKIE_SECURE', 'true' if os.environ.get('FLASK_ENV') == 'production' else 'false').lower() in ('1', 'true', 'yes'),
     PERMANENT_SESSION_LIFETIME=int(os.environ.get('SESSION_LIFETIME_SECONDS', 8 * 3600)),
 )
 app.config['UPLOAD_FOLDER'] = os.environ.get('UPLOAD_FOLDER', os.path.join(tempfile.gettempdir(), 'certflow-uploads'))
