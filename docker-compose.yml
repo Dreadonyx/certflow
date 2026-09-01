@@ -51,6 +51,6 @@ services:
     environment:
       # Replace this with your actual domain name!
       - DOMAIN_NAME=${DOMAIN_NAME:-certflow.duckdns.org}
-    command: caddy reverse-proxy --from https://$$DOMAIN_NAME --to http://web:5000
+    command: caddy reverse-proxy --from https://${DOMAIN_NAME:-certflow.duckdns.org} --to http://web:5000
     depends_on:
       - web
