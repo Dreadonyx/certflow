@@ -1,8 +1,6 @@
 services:
   web:
     build: .
-    ports:
-      - "5000:5000"
     restart: unless-stopped
     environment:
       # ── App security ────────────────────────────────────────────────
@@ -16,7 +14,7 @@ services:
       ADMIN_PASSWORD_HASH: "$$argon2id$$v=19$$m=65536,t=3,p=4$$KWGmoIpwKwAUdSYbCgIGUA$$bgcSv96TZHac5LvK1SDyFARlcewGJeJYzexYR4bs1tQ"
 
       # ── Session / cookie hardening ─────────────────────────────────
-      SESSION_COOKIE_SECURE: "false"
+      SESSION_COOKIE_SECURE: "true"
       SESSION_COOKIE_SAMESITE: Strict
       SESSION_LIFETIME_SECONDS: "28800"   # 8 hours
 
@@ -43,3 +41,16 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  caddy:
+    image: caddy:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      # Replace this with your actual domain name!
+      - DOMAIN_NAME=${DOMAIN_NAME:-certflow.duckdns.org}
+    command: caddy reverse-proxy --from https://$$DOMAIN_NAME --to http://web:5000
+    depends_on:
+      - web
