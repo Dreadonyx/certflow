@@ -1,0 +1,56 @@
+# ── CertFlow Caddyfile ────────────────────────────────────────────────────────
+# Replace the domain below or set the DOMAIN_NAME env var in docker-compose.yml
+{$DOMAIN_NAME:certflow.duckdns.org} {
+
+    # ── DDoS / abuse mitigations ──────────────────────────────────────────
+    # Reject oversized request bodies at the proxy layer (before Flask sees them).
+    # 32 MB matches MAX_REQUEST_BYTES in the app; adjust both together.
+    request_body {
+        max_size 32MB
+    }
+
+    # Strip hop-by-hop headers that could be used to spoof X-Forwarded-For.
+    # Caddy adds its own trusted X-Forwarded-For after stripping the client one.
+    header_up -X-Forwarded-For
+    header_up -X-Real-IP
+
+    # ── Security response headers ─────────────────────────────────────────
+    header {
+        # Prevent MIME sniffing
+        X-Content-Type-Options "nosniff"
+        # Prevent clickjacking
+        X-Frame-Options "DENY"
+        # Enforce HTTPS
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        # Minimal referrer leakage
+        Referrer-Policy "strict-origin-when-cross-origin"
+        # Disable unused browser features
+        Permissions-Policy "camera=(), microphone=(), geolocation=()"
+    }
+
+    # ── Reverse proxy to Gunicorn ─────────────────────────────────────────
+    reverse_proxy web:5000 {
+        # Kill connections that take too long to send headers (Slowloris defence)
+        transport http {
+            read_timeout        30s
+            write_timeout      300s   # generous for bulk-generate SSE streams
+            response_header_timeout 30s
+        }
+
+        # Pass real client IP to Flask (ProxyFix reads this)
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Real-IP       {remote_host}
+    }
+
+    # ── TLS: automatic HTTPS via Let's Encrypt ────────────────────────────
+    tls {
+        protocols tls1.2 tls1.3
+    }
+
+    # ── Logging ───────────────────────────────────────────────────────────
+    log {
+        output stdout
+        format json
+        level  INFO
+    }
+}

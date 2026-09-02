@@ -1,4 +1,5 @@
 from flask import Flask, render_template, request, send_file, jsonify, Response, stream_with_context, session, redirect, url_for, abort, g
+from werkzeug.middleware.proxy_fix import ProxyFix
 from PIL import Image, ImageDraw, ImageFont
 from werkzeug.utils import secure_filename
 import io
@@ -31,6 +32,10 @@ from email.mime.application import MIMEApplication
 Image.MAX_IMAGE_PIXELS = int(os.environ.get('MAX_IMAGE_PIXELS', '25000000'))
 
 app = Flask(__name__)
+# Trust exactly one proxy hop (Caddy) for X-Forwarded-For / X-Forwarded-Proto.
+# x_for=1 means only the outermost address in the header is used, preventing
+# spoofed IPs from bypassing rate limits.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 app.config.update(
     SECRET_KEY=os.environ.get('SECRET_KEY', 'dev-only-change-me'),
     MAX_CONTENT_LENGTH=int(os.environ.get('MAX_REQUEST_BYTES', 128 * 1024 * 1024)),
@@ -638,6 +643,7 @@ def logout():
 
 
 @app.route('/health')
+@limiter.limit('60 per minute')
 def health():
     return jsonify({'status': 'ok'}), 200
 
