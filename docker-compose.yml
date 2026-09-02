@@ -1,7 +1,28 @@
 services:
+  # ── Redis: shared rate-limit store across all Gunicorn workers ────────────
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: >
+      redis-server
+      --maxmemory 64mb
+      --maxmemory-policy allkeys-lru
+      --save ""
+      --appendonly no
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   web:
     build: .
     restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
     environment:
       # ── App security ────────────────────────────────────────────────
       FLASK_ENV: production
@@ -19,12 +40,10 @@ services:
       SESSION_LIFETIME_SECONDS: "28800"   # 8 hours
 
       # ── Rate limiting ───────────────────────────────────────────────
-      # Per-process limits (2 workers = 2x these limits in practice).
-      # For strict shared limits across workers, point to a Redis instance:
-      #   RATELIMIT_STORAGE_URI: redis://redis:6379
+      # Shared across ALL workers via Redis — limits are strictly per-IP.
       GLOBAL_RATE_LIMIT: "200 per hour"
       LOGIN_RATE_LIMIT: "5 per minute"
-      RATELIMIT_STORAGE_URI: "memory://"
+      RATELIMIT_STORAGE_URI: "redis://redis:6379"
 
       # ── Upload / generation limits ──────────────────────────────────
       MAX_REQUEST_BYTES: "33554432"   # 32 MB
@@ -48,9 +67,16 @@ services:
     ports:
       - "80:80"
       - "443:443"
+      - "443:443/udp"   # HTTP/3 (QUIC)
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
     environment:
-      # Replace this with your actual domain name!
       - DOMAIN_NAME=${DOMAIN_NAME:-certflow.duckdns.org}
-    command: caddy reverse-proxy --from https://${DOMAIN_NAME:-certflow.duckdns.org} --to http://web:5000
     depends_on:
       - web
+
+volumes:
+  caddy_data:
+  caddy_config:
