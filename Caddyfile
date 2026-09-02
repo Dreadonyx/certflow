@@ -9,10 +9,6 @@
         max_size 32MB
     }
 
-    # Strip hop-by-hop headers that could be used to spoof X-Forwarded-For.
-    # Caddy adds its own trusted X-Forwarded-For after stripping the client one.
-    header_up -X-Forwarded-For
-    header_up -X-Real-IP
 
     # ── Security response headers ─────────────────────────────────────────
     header {
@@ -37,7 +33,10 @@
             response_header_timeout 30s
         }
 
-        # Pass real client IP to Flask (ProxyFix reads this)
+        # Strip client-supplied forwarded headers to prevent IP spoofing,
+        # then set them to the real remote address Caddy sees.
+        header_up -X-Forwarded-For
+        header_up -X-Real-IP
         header_up X-Forwarded-For {remote_host}
         header_up X-Real-IP       {remote_host}
     }
