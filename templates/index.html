@@ -268,7 +268,10 @@ CertFlow</textarea>
             <!-- ZIP Attachment Options -->
             <div id="zipAttachmentSection" class="controls" style="margin-top:14px; display:none;">
                 <div class="control-group" style="grid-column: 1 / -1;">
-                    <label>Participant Files ZIP <span class="hint">(one file per participant row, e.g. QR codes / passes / files)</span></label>
+                    <label style="display:flex; align-items:center; gap:8px;">
+                        Participant Files ZIP <span class="hint">(one file per participant row, e.g. QR codes / passes / files)</span>
+                        <span id="attachmentsZipBadge" style="font-size:11px; padding:2px 8px; border-radius:20px; background:rgba(255,80,80,0.18); color:#ff6b6b; border:1px solid rgba(255,80,80,0.35); white-space:nowrap;">⚠ Not loaded</span>
+                    </label>
                     <div class="upload-area" id="attachmentsZipUpload" style="padding: 14px; margin-top:6px;">
                         <span class="upload-icon" style="font-size:18px;">📦</span>
                         <p>Click or drag a ZIP file here</p>
@@ -350,7 +353,26 @@ CertFlow</textarea>
             if (previewBtn) previewBtn.disabled = !(templateImage && list.length > 0);
             if (generateBtn) generateBtn.disabled = !(templateImage && list.length > 0);
 
-            if (list.length > 0) {
+            const needsZip = currentEmailMode === 'zip' || currentEmailMode === 'both';
+            const zipReady = !needsZip || !!attachmentsZipData;
+
+            // Update the ZIP badge to reflect loaded state
+            const zipBadge = document.getElementById('attachmentsZipBadge');
+            if (zipBadge) {
+                if (attachmentsZipData) {
+                    zipBadge.textContent = '✓ Loaded';
+                    zipBadge.style.background = 'rgba(0,200,100,0.18)';
+                    zipBadge.style.color = 'var(--accent)';
+                    zipBadge.style.borderColor = 'rgba(0,200,100,0.35)';
+                } else {
+                    zipBadge.textContent = '⚠ Not loaded';
+                    zipBadge.style.background = 'rgba(255,80,80,0.18)';
+                    zipBadge.style.color = '#ff6b6b';
+                    zipBadge.style.borderColor = 'rgba(255,80,80,0.35)';
+                }
+            }
+
+            if (list.length > 0 && zipReady) {
                 sendBtn.disabled = false;
                 if (currentEmailMode === 'cert') {
                     sendBtn.textContent = 'Send Automated Certificates via Email';
@@ -359,6 +381,9 @@ CertFlow</textarea>
                 } else {
                     sendBtn.textContent = 'Send Certificates + ZIP Attachments via Email';
                 }
+            } else if (list.length > 0 && !zipReady) {
+                sendBtn.disabled = true;
+                sendBtn.textContent = 'Upload QR / Custom ZIP to Send';
             } else {
                 sendBtn.disabled = true;
                 sendBtn.textContent = 'Send Emails (Add Participants First)';
