@@ -200,12 +200,13 @@ Robert Kumar, AI &amp; DS, robert@example.com"></textarea>
 
             <div class="controls" style="margin-top:12px;">
                 <div class="control-group">
-                    <label>Sender</label>
-                    <input type="text" value="Configured by server administrator" disabled>
+                    <label>Sender Email</label>
+                    <input type="email" id="smtpUser" placeholder="you@gmail.com" autocomplete="username">
                 </div>
-                <div class="control-group">
-                    <label>Provider</label>
-                    <input type="text" value="Server-managed provider" disabled>
+                <div class="control-group" style="position:relative;">
+                    <label>App Password</label>
+                    <input type="password" id="smtpPassword" placeholder="App password / token" autocomplete="current-password" style="padding-right:40px;">
+                    <button type="button" id="toggleSmtpPass" onclick="(function(){var i=document.getElementById('smtpPassword');var b=document.getElementById('toggleSmtpPass');i.type=i.type==='password'?'text':'password';b.textContent=i.type==='password'?'👁':'🙈';})()" style="position:absolute;right:8px;bottom:7px;background:none;border:none;cursor:pointer;font-size:16px;padding:0;color:var(--text-muted);">👁</button>
                 </div>
                 <div class="control-group">
                     <label>Sender Name</label>
@@ -583,6 +584,13 @@ CertFlow</textarea>
         document.getElementById('testSmtpBtn').addEventListener('click', async () => {
             const btn    = document.getElementById('testSmtpBtn');
             const result = document.getElementById('testSmtpResult');
+            const user   = document.getElementById('smtpUser').value.trim();
+            const pass   = document.getElementById('smtpPassword').value;
+            if (!user || !pass) {
+                result.textContent = '⚠ Enter your sender email and app password first.';
+                result.style.color = '#ff9800';
+                return;
+            }
             btn.disabled = true;
             result.textContent = '⏳ Testing...';
             result.style.color = 'var(--text-muted)';
@@ -590,7 +598,13 @@ CertFlow</textarea>
                 const res  = await fetch('/test-smtp', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({})
+                    body: JSON.stringify({
+                        smtpProvider: document.getElementById('smtpProvider').value,
+                        smtpUser:     user,
+                        smtpPassword: pass,
+                        smtpHost:     document.getElementById('smtpHost')?.value || '',
+                        smtpPort:     document.getElementById('smtpPort')?.value || '587',
+                    })
                 });
                 const data = await res.json();
                 if (data.success) {
@@ -640,6 +654,12 @@ CertFlow</textarea>
                 emailSubject:      document.getElementById('emailSubject').value,
                 emailBody:         document.getElementById('emailBody').value,
                 emailAttachFormat: document.getElementById('emailAttachFormat').value,
+                smtpProvider:      document.getElementById('smtpProvider').value,
+                smtpUser:          document.getElementById('smtpUser').value.trim(),
+                smtpPassword:      document.getElementById('smtpPassword').value,
+                smtpHost:          document.getElementById('smtpHost')?.value || '',
+                smtpPort:          document.getElementById('smtpPort')?.value || '587',
+                fromName:          document.getElementById('fromName').value || 'CertFlow',
             };
 
             try {
