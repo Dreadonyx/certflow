@@ -900,6 +900,24 @@ def _make_smtp_connection(smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass)
     return server
 
 
+def _resolve_smtp_from_request(data):
+    """Build (host, port, mode, user, password, sender) from request data using SMTP_PRESETS."""
+    provider = (data.get('smtpProvider') or 'gmail').lower()
+    user     = (data.get('smtpUser') or '').strip()
+    password = data.get('smtpPassword') or ''
+    if not user or not password:
+        raise ValueError('Sender email and app password are required.')
+    if provider in SMTP_PRESETS:
+        host, port, mode = SMTP_PRESETS[provider]
+    else:  # custom
+        host = (data.get('smtpHost') or '').strip()
+        port = int(data.get('smtpPort') or 587)
+        mode = 'ssl' if port == 465 else 'starttls'
+        if not host:
+            raise ValueError('SMTP host is required for a custom provider.')
+    return host, port, mode, user, password, user  # sender == user
+
+
 class EmailService:
     """Provider abstraction; credentials are read only from server environment."""
     def __init__(self):
@@ -966,14 +984,17 @@ class EmailService:
 @login_required
 @limiter.limit('10 per minute')
 def test_smtp():
-    """Check server-side provider configuration; never accepts credentials from the browser."""
+    """Test SMTP connectivity using credentials supplied by the browser."""
     try:
         require_csrf()
-        service = EmailService()
-        service.connect(); service.close()
-        return jsonify({'success': True, 'message': f'{service.provider} provider is configured.'})
+        data = request.json or {}
+        host, port, mode, user, password, _ = _resolve_smtp_from_request(data)
+        server = _make_smtp_connection(host, port, mode, user, password)
+        server.quit()
+        provider = (data.get('smtpProvider') or 'custom').lower()
+        return jsonify({'success': True, 'message': f'Connected to {host} as {user} ✓'})
     except smtplib.SMTPAuthenticationError:
-        return jsonify({'success': False, 'error': 'Email provider authentication failed.'}), 400
+        return jsonify({'success': False, 'error': 'Authentication failed — check your email and app password.'}), 400
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
 
@@ -1019,8 +1040,36 @@ def send_certificates():
         return Response(stream_with_context(_err()), mimetype='text/event-stream',
                         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
-    email_service = EmailService()
-    from_name = os.environ.get('EMAIL_FROM_NAME', 'CertFlow').strip()
+    # ── Resolve credentials from UI payload ───────────────────────────────────────
+    try:
+        smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass, smtp_sender = _resolve_smtp_from_request(data)
+    except ValueError as e:
+        def _err():
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+        return Response(stream_with_context(_err()), mimetype='text/event-stream',
+                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+    class _InlineEmailService:
+        """Lightweight SMTP wrapper built from per-request credentials."""
+        def __init__(self):
+            self.sender = smtp_sender
+            self.server = None
+        def connect(self):
+            self.server = _make_smtp_connection(smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass)
+        def send(self, message, recipient):
+            try:
+                self.server.sendmail(self.sender, recipient, message.as_string())
+            except (smtplib.SMTPServerDisconnected, TimeoutError, OSError, smtplib.SMTPException):
+                self.connect()
+                self.server.sendmail(self.sender, recipient, message.as_string())
+            return 'accepted'
+        def close(self):
+            if self.server:
+                try: self.server.quit()
+                except Exception: pass
+                self.server = None
+
+    from_name = (data.get('fromName') or os.environ.get('EMAIL_FROM_NAME', 'CertFlow')).strip()
     subject   = data.get('emailSubject') or 'Your Certificate'
     body      = data.get('emailBody') or 'Hi {name},\n\nPlease find your certificate attached.\n\nRegards,\nCertFlow'
 
@@ -1036,7 +1085,7 @@ def send_certificates():
     def stream():
         results = []
         skipped = 0
-        service = email_service
+        service = _InlineEmailService()
 
         try:
             # ── Initial SSE buffer flush for Gunicorn / reverse proxies ───────────
@@ -1047,7 +1096,7 @@ def send_certificates():
                 service.connect()
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Connected to mail server. Preparing emails...'})}\n\n"
             except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'message': 'Email provider is not configured or unavailable.'})}\n\n"
+                yield f"data: {json.dumps({'type': 'error', 'message': f'Email provider connection failed: {e}'})}\n\n"
                 return
 
             total = len([p for p in participants if p.get('email')])
