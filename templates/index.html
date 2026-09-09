@@ -260,7 +260,19 @@ CertFlow</textarea>
 
             <!-- Cert Attachment Options -->
             <div id="certAttachmentSection" class="controls" style="margin-top:14px;">
-                <div class="control-group">
+                <!-- Attach cert toggle -->
+                <div class="control-group" style="grid-column: 1 / -1;">
+                    <label style="display:flex; align-items:center; gap:10px; cursor:pointer; user-select:none;">
+                        <span style="font-weight:600;">Attach Certificate to Email</span>
+                        <label class="toggle-switch" title="Toggle certificate attachment">
+                            <input type="checkbox" id="attachCertToggle" checked>
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span id="attachCertLabel" style="font-size:12px; color:var(--text-secondary);">On — cert will be attached</span>
+                    </label>
+                </div>
+                <!-- Format selector (only shown when attachment is on) -->
+                <div class="control-group" id="certFormatGroup">
                     <label>Certificate Format</label>
                     <select id="emailAttachFormat">
                         <option value="same">Same as template image</option>
@@ -315,6 +327,7 @@ CertFlow</textarea>
         let csvParticipants = [];
         let attachmentsZipData = null;
         let currentEmailMode = 'cert'; // 'cert', 'zip', 'both'
+        let attachCert = true; // whether to include cert as attachment
 
         function setEmailMode(mode) {
             currentEmailMode = mode;
@@ -340,6 +353,23 @@ CertFlow</textarea>
 
         document.querySelectorAll('.mode-toggle-btn').forEach(btn => {
             btn.addEventListener('click', () => setEmailMode(btn.dataset.mode));
+        });
+
+        // Attach cert toggle
+        document.getElementById('attachCertToggle').addEventListener('change', function() {
+            attachCert = this.checked;
+            const label = document.getElementById('attachCertLabel');
+            const fmtGroup = document.getElementById('certFormatGroup');
+            if (attachCert) {
+                label.textContent = 'On — cert will be attached';
+                label.style.color = 'var(--primary)';
+                fmtGroup.style.display = '';
+            } else {
+                label.textContent = 'Off — email body only, no attachment';
+                label.style.color = 'var(--text-secondary)';
+                fmtGroup.style.display = 'none';
+            }
+            updateSendBtnState();
         });
 
         // ── Template upload ───────────────────────────────────────────────────
@@ -388,7 +418,9 @@ CertFlow</textarea>
             if (list.length > 0 && zipReady) {
                 sendBtn.disabled = false;
                 if (currentEmailMode === 'cert') {
-                    sendBtn.textContent = 'Send Automated Certificates via Email';
+                    sendBtn.textContent = attachCert
+                        ? 'Send Automated Certificates via Email'
+                        : 'Send Email (No Attachment)';
                 } else if (currentEmailMode === 'zip') {
                     sendBtn.textContent = 'Send Custom ZIP Attachments via Email';
                 } else {
@@ -663,7 +695,7 @@ CertFlow</textarea>
             participants = parseParticipants();
             if (!participants.length) return alert('Add participant data first.');
 
-            if ((currentEmailMode === 'cert' || currentEmailMode === 'both') && !templateImage) {
+            if ((currentEmailMode === 'cert' || currentEmailMode === 'both') && attachCert && !templateImage) {
                 return alert('Please upload a certificate template in Step 1 for automated certificates.');
             }
             if ((currentEmailMode === 'zip' || currentEmailMode === 'both') && !attachmentsZipData) {
@@ -686,10 +718,11 @@ CertFlow</textarea>
             btn.disabled = true;
 
             const payload = {
-                template:          (currentEmailMode === 'zip' ? null : templateImage),
+                template:          (currentEmailMode === 'zip' || !attachCert ? null : templateImage),
                 participants,
                 settings:          getSettings(),
                 attachmentsZip:    (currentEmailMode === 'cert' ? null : attachmentsZipData),
+                attachCert:        attachCert,
                 emailSubject:      document.getElementById('emailSubject').value,
                 emailBody:         document.getElementById('emailBody').value,
                 emailAttachFormat: document.getElementById('emailAttachFormat').value,

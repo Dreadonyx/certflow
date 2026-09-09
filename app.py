@@ -1126,8 +1126,9 @@ def send_certificates():
                                             .replace('{string2}', p_str2).replace('{department}', p_str2)
                     msg.attach(MIMEText(personal_body, 'plain', 'utf-8'))
 
-                    # Generate and attach certificate if template was provided
-                    if has_template and template_image:
+                    # Generate and attach certificate if template was provided and attachment is enabled
+                    attach_cert_flag = data.get('attachCert', True)
+                    if has_template and template_image and attach_cert_flag:
                         cert = draw_certificate(template_image, p_str1, p_str2, settings)
 
                         # Convert to chosen attachment format
