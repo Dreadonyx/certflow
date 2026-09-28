@@ -12,6 +12,10 @@ import ssl
 import json
 import re
 import secrets
+import hashlib
+import random
+from contextlib import closing
+import subprocess
 import logging
 import time
 import tempfile
@@ -66,7 +70,7 @@ def close_db(exc):
 
 def init_db():
     """Create the users table if it doesn't exist."""
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS users (
                 id       INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +79,11 @@ def init_db():
                 created  INTEGER NOT NULL DEFAULT (strftime('%s','now'))
             )
         """)
+        conn.execute("""CREATE TABLE IF NOT EXISTS send_jobs (
+            id TEXT PRIMARY KEY, owner TEXT NOT NULL, fingerprint TEXT NOT NULL,
+            completed TEXT NOT NULL DEFAULT '{}', paused INTEGER NOT NULL DEFAULT 0,
+            lease REAL NOT NULL DEFAULT 0
+        )""")
         conn.commit()
 
 init_db()
@@ -166,6 +175,7 @@ IMAGE_FORMATS = {
     'image/bmp':  ('BMP',  'bmp'),
     'image/tiff': ('TIFF', 'tiff'),
     'image/gif':  ('GIF',  'gif'),
+    'application/pdf': ('PDF', 'pdf'),
 }
 
 EXPORT_FORMAT_MAP = {
@@ -248,16 +258,29 @@ def validate_participants(participants):
             continue
         name = str(p.get('string1') or p.get('name') or '').strip()
         department = str(p.get('string2') or p.get('department') or '').strip()
+        str3 = str(p.get('string3') or '').strip()
+        values = p.get('values', [name, department, str3])
+        if not isinstance(values, list) or any(not isinstance(v, str) or len(v) > MAX_DEPARTMENT_LENGTH for v in values):
+            errors.append(f'Row {index}: invalid or excessively long column values')
+            continue
         email = str(p.get('email') or '').strip()
         if not name:
             errors.append(f'Row {index}: name is required')
             continue
-        if len(name) > MAX_NAME_LENGTH or len(department) > MAX_DEPARTMENT_LENGTH:
+        if len(name) > MAX_NAME_LENGTH or len(department) > MAX_DEPARTMENT_LENGTH or len(str3) > MAX_DEPARTMENT_LENGTH:
             errors.append(f'Row {index}: text is too long')
             continue
         if email and not validate_email(email):
             errors.append(f'Row {index}: invalid email address')
-        cleaned.append({'string1': name, 'string2': department, 'name': name, 'department': department, 'email': validate_email(email) or ''})
+        cleaned.append({
+            'values': values,
+            'string1': name,
+            'string2': department,
+            'string3': str3,
+            'name': name,
+            'department': department,
+            'email': validate_email(email) or '',
+        })
     if errors:
         raise ValueError('; '.join(errors[:10]))
     return cleaned
@@ -268,17 +291,29 @@ def validate_settings(settings, width=None, height=None):
         return {}
     allowed_fonts = set(FONT_MAP)
     out = dict(settings)
-    for key in ('nameX', 'nameY', 'deptX', 'deptY'):
+    for key in ('nameX', 'nameY', 'deptX', 'deptY', 'str3X', 'str3Y'):
         limit = max(width or 10000, height or 10000)
         try: out[key] = max(-limit, min(limit, int(float(settings.get(key, 0)))) )
         except (TypeError, ValueError): out[key] = 0
-    for key in ('nameFontSize', 'deptFontSize'):
+    for key in ('nameFontSize', 'deptFontSize', 'str3FontSize'):
         try: out[key] = max(1, min(400, int(float(settings.get(key, 32)))))
         except (TypeError, ValueError): out[key] = 32
-    for key in ('nameFont', 'deptFont'):
+    for key in ('nameFont', 'deptFont', 'str3Font'):
         if out.get(key) not in allowed_fonts: out[key] = 'arial.ttf'
-    for key in ('nameColor', 'deptColor'):
+    for key in ('nameColor', 'deptColor', 'str3Color'):
         if not isinstance(out.get(key), str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', out[key]): out[key] = '#000000'
+    if 'fields' in settings:
+        if not isinstance(settings['fields'], list):
+            raise ValueError('Text fields must be a list.')
+        out['fields'] = []
+        for field in settings['fields']:
+            if not isinstance(field, dict):
+                raise ValueError('Invalid text field.')
+            column = field.get('column')
+            if not isinstance(column, int) or isinstance(column, bool) or column < 0:
+                raise ValueError('Choose a valid CSV column.')
+            normalized = validate_settings({f'name{k}': field.get(k) for k in ('X', 'Y', 'FontSize', 'Font', 'Color', 'Bold')}, width, height)
+            out['fields'].append({'column': column, **{k: normalized.get(f'name{k}') for k in ('X', 'Y', 'FontSize', 'Font', 'Color', 'Bold')}})
     return out
 
 
@@ -308,6 +343,17 @@ def load_font(font_family, size, is_bold=False):
             return ImageFont.load_default(size=size)
 
 
+def render_pdf_first_page(pdf_bytes):
+    """Rasterize the first page of a PDF to PNG bytes using poppler's pdftoppm."""
+    proc = subprocess.run(
+        ['pdftoppm', '-f', '1', '-l', '1', '-png', '-singlefile', '-'],
+        input=pdf_bytes, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        raise ValueError('Failed to render PDF template.')
+    return proc.stdout
+
+
 def decode_template(template_data):
     """Decode base64 data-URL → (PIL Image, pil_format, extension)."""
     if not isinstance(template_data, str) or len(template_data) > MAX_IMAGE_BYTES * 2:
@@ -326,6 +372,9 @@ def decode_template(template_data):
         raise ValueError('Template exceeds the upload limit.')
     pil_format, ext = IMAGE_FORMATS.get(mime, ('PNG', 'png'))
     try:
+        if pil_format == 'PDF':
+            decoded = render_pdf_first_page(decoded)
+            pil_format, ext = 'PNG', 'png'
         image = Image.open(io.BytesIO(decoded))
         image.verify()
         image = Image.open(io.BytesIO(decoded))
@@ -339,15 +388,26 @@ def decode_template(template_data):
     return image, pil_format, ext
 
 
-def draw_certificate(template_image, str1, str2, settings):
-    """Overlay string 1 + string 2 text on a copy of the template."""
+def draw_certificate(template_image, str1, str2, settings, str3='', values=None):
+    """Overlay string 1 + string 2 + optional string 3 text on a copy of the template."""
     cert = template_image.copy()
     draw = ImageDraw.Draw(cert)
 
+    if 'fields' in settings:
+        values = values if values is not None else [str1, str2, str3]
+        for field in settings['fields']:
+            column = field['column']
+            text = values[column] if column < len(values) else ''
+            font = load_font(field['Font'], field['FontSize'], field.get('Bold') in (True, 'true', 'True', '1', 1))
+            draw.text((field['X'], field['Y']), text, fill=hex_to_rgb(field['Color']), font=font)
+        return cert
+
     name_bold = settings.get('nameBold') in (True, 'true', 'True', '1', 1)
     dept_bold = settings.get('deptBold') in (True, 'true', 'True', '1', 1)
+    str3_bold = settings.get('str3Bold') in (True, 'true', 'True', '1', 1)
     name_font = load_font(settings.get('nameFont', 'arial.ttf'), int(settings.get('nameFontSize', 38)), name_bold)
     dept_font = load_font(settings.get('deptFont', 'arial.ttf'), int(settings.get('deptFontSize', 32)), dept_bold)
+    str3_font = load_font(settings.get('str3Font', 'arial.ttf'), int(settings.get('str3FontSize', 28)), str3_bold)
 
     draw.text(
         (int(settings.get('nameX', 420)), int(settings.get('nameY', 270))),
@@ -357,6 +417,11 @@ def draw_certificate(template_image, str1, str2, settings):
         (int(settings.get('deptX', 76)), int(settings.get('deptY', 303))),
         str2, fill=hex_to_rgb(settings.get('deptColor', '#000000')), font=dept_font,
     )
+    if str3:
+        draw.text(
+            (int(settings.get('str3X', 76)), int(settings.get('str3Y', 340))),
+            str3, fill=hex_to_rgb(settings.get('str3Color', '#000000')), font=str3_font,
+        )
     return cert
 
 
@@ -691,11 +756,43 @@ def unhandled_error(error):
     return jsonify({'success': False, 'error': 'An unexpected server error occurred.'}), 500
 
 
+def parse_csv_rows(rows, header_mode='auto'):
+    rows = [[c.strip() for c in row] for row in rows if any(c.strip() for c in row)]
+    if not rows:
+        return [], []
+    first = [c.lower() for c in rows[0]]
+    has_header = header_mode == 'yes' or (header_mode == 'auto' and (
+        first[0] in ('name', 'participant', 'string1', 'string 1', 'str1', 'string_1', 'participant name', 'student name')
+        or any(c in ('email', 'email id', 'email address', 'e-mail') for c in first)))
+    headers = rows.pop(0) if has_header else []
+    width = max([len(headers)] + [len(row) for row in rows])
+    email_index = next((i for i, h in enumerate(headers) if h.lower() in ('email', 'email id', 'email address', 'e-mail')), None)
+    if email_index is None and rows and width > 1 and any(len(r) == width and validate_email(r[-1]) for r in rows):
+        email_index = width - 1
+    indexes = [i for i in range(width) if i != email_index]
+    columns = [headers[i] if i < len(headers) and headers[i] else f'String {n + 1}' for n, i in enumerate(indexes)]
+    participants = []
+    for row in rows:
+        values = [row[i] if i < len(row) else '' for i in indexes]
+        participants.append({'values': values, 'name': values[0] if values else '',
+                             'department': values[1] if len(values) > 1 else '',
+                             'string3': values[2] if len(values) > 2 else '',
+                             'email': row[email_index] if email_index is not None and email_index < len(row) else ''})
+    return participants, columns
+
+
+def personalize(text, participant):
+    values = participant.get('values', [])
+    substitutions = {'name': participant['name'], 'department': participant['department']}
+    substitutions.update({f'string{i + 1}': value for i, value in enumerate(values)})
+    return re.sub(r'\{(name|department|string\d+)\}', lambda m: substitutions.get(m[1], ''), text)
+
+
 @app.route('/parse-csv', methods=['POST'])
 @login_required
 @limiter.limit('30 per minute')
 def parse_csv():
-    """Parse CSV → [{string1, string2, email}, …]"""
+    """Parse CSV → [{string1, string2, string3, email}, …]"""
     try:
         if 'csvFile' not in request.files or request.files['csvFile'].filename == '':
             return jsonify({'success': False, 'error': 'No file uploaded'}), 400
@@ -709,31 +806,9 @@ def parse_csv():
         if len(rows) > MAX_CSV_ROWS + 1:
             return jsonify({'success': False, 'error': f'Maximum {MAX_CSV_ROWS} CSV rows allowed'}), 413
 
-        # Auto-detect header row
-        if rows and rows[0] and rows[0][0].strip().lower() in ('name', 'participant', 'string1', 'string 1', 'str1'):
-            rows = rows[1:]
-
-        participants = []
-        errors = []
-        for row in rows:
-            if row and row[0].strip():
-                str1 = row[0].strip()
-                str2 = row[1].strip() if len(row) > 1 else ''
-                email = row[2].strip() if len(row) > 2 else ''
-                email_value = row[2].strip() if len(row) > 2 else ''
-                if email_value and not validate_email(email_value):
-                    errors.append(f'Row {len(participants) + 1}: invalid email address')
-                    continue
-                participants.append({
-                    'string1':    str1,
-                    'string2':    str2,
-                    'name':       str1,
-                    'department': str2,
-                    'email':      email_value,
-                })
-        if errors:
-            return jsonify({'success': False, 'error': '; '.join(errors[:10])}), 400
-        return jsonify({'success': True, 'participants': validate_participants(participants), 'count': len(participants)})
+        participants, columns = parse_csv_rows(rows, request.form.get('headerMode', 'auto'))
+        return jsonify({'success': True, 'participants': validate_participants(participants),
+                        'columns': columns, 'count': len(participants)})
 
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 400
@@ -798,9 +873,16 @@ def generate_certificate():
         template_image, pil_format, ext = decode_template(data['template'])
         str1 = data.get('string1') or data.get('name', '')
         str2 = data.get('string2') or data.get('department', '')
-        participants = validate_participants([{'name': str1, 'department': str2}])
+        str3 = data.get('string3', '')
+        participants = validate_participants([dict(data, name=str1, department=str2, string3=str3)])
         settings = validate_settings(data, template_image.width, template_image.height)
-        cert = draw_certificate(template_image, participants[0]['name'], participants[0]['department'], settings)
+        cert = draw_certificate(
+            template_image,
+            participants[0]['name'],
+            participants[0]['department'],
+            settings,
+            str3=participants[0].get('string3', ''), values=participants[0]['values'],
+        )
         img_bytes = image_to_bytes(cert, pil_format)
         mime = 'image/jpeg' if ext == 'jpg' else f'image/{ext}'
         return jsonify({
@@ -831,7 +913,8 @@ def generate_batch():
         for p in participants:
             str1 = p.get('string1') or p.get('name', '')
             str2 = p.get('string2') or p.get('department', '')
-            c = draw_certificate(template_image, str1, str2, settings)
+            str3 = p.get('string3', '')
+            c = draw_certificate(template_image, str1, str2, settings, str3=str3, values=p['values'])
             if pil_format in ('JPEG', 'PDF') and c.mode in ('RGBA', 'P'):
                 c = c.convert('RGB')
             certs.append(c)
@@ -999,6 +1082,36 @@ def test_smtp():
         return jsonify({'success': False, 'error': str(e)}), 400
 
 
+def retryable_mail_error(error):
+    if isinstance(error, smtplib.SMTPRecipientsRefused):
+        return bool(error.recipients) and all(400 <= code < 500 for code, _ in error.recipients.values())
+    if isinstance(error, smtplib.SMTPResponseException):
+        return 400 <= error.smtp_code < 500
+    if isinstance(error, smtplib.SMTPServerDisconnected):
+        return True
+    return isinstance(error, OSError) and not isinstance(error, smtplib.SMTPException)
+
+
+def send_job_owner():
+    return hashlib.sha256(session.get('_csrf_token', '').encode()).hexdigest()
+
+
+@app.route('/send-jobs/<job_id>/control', methods=['POST'])
+@login_required
+@limiter.limit('60 per minute')
+def control_send_job(job_id):
+    require_csrf()
+    action = (request.get_json(silent=True) or {}).get('action')
+    if action not in ('pause', 'resume'):
+        return jsonify(error='Invalid action'), 400
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        changed = conn.execute('UPDATE send_jobs SET paused=? WHERE id=? AND owner=?',
+                               (int(action == 'pause'), job_id, send_job_owner())).rowcount
+    if not changed:
+        return jsonify(error='Send job not found'), 404
+    return jsonify(success=True)
+
+
 @app.route('/send-certificates', methods=['POST'])
 @login_required
 @limiter.limit('5 per minute')
@@ -1013,26 +1126,23 @@ def send_certificates():
         try:
             template_image, pil_format, ext = decode_template(data['template'])
         except Exception as e:
-            def _err():
-                yield f"data: {json.dumps({'type': 'error', 'message': f'Template decode failed: {e}'})}\n\n"
-            return Response(stream_with_context(_err()), mimetype='text/event-stream',
-                            headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+            return jsonify(success=False, error=f'Template decode failed: {e}'), 400
 
     try:
         participants = validate_participants(data.get('participants', []))
     except ValueError as exc:
         return jsonify({'success': False, 'error': str(exc)}), 400
-    settings     = validate_settings(data.get('settings', {}), template_image.width if template_image else None, template_image.height if template_image else None)
+    try:
+        settings = validate_settings(data.get('settings', {}), template_image.width if template_image else None, template_image.height if template_image else None)
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
 
     # Optional extra attachment ZIP — one file per participant, matched by sheet order
     attachments_zip_data = data.get('attachmentsZip')
     try:
         extra_attachments = extract_zip_attachments(attachments_zip_data)
     except Exception as e:
-        def _err():
-            yield f"data: {json.dumps({'type': 'error', 'message': f'Attachment ZIP could not be read: {e}'})}\n\n"
-        return Response(stream_with_context(_err()), mimetype='text/event-stream',
-                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+        return jsonify(success=False, error=f'Attachment ZIP could not be read: {e}'), 400
 
     if extra_attachments and len(extra_attachments) != len(participants):
         def _err():
@@ -1044,10 +1154,7 @@ def send_certificates():
     try:
         smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass, smtp_sender = _resolve_smtp_from_request(data)
     except ValueError as e:
-        def _err():
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-        return Response(stream_with_context(_err()), mimetype='text/event-stream',
-                        headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+        return jsonify(success=False, error=str(e)), 400
 
     class _InlineEmailService:
         """Lightweight SMTP wrapper built from per-request credentials."""
@@ -1057,11 +1164,7 @@ def send_certificates():
         def connect(self):
             self.server = _make_smtp_connection(smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass)
         def send(self, message, recipient):
-            try:
-                self.server.sendmail(self.sender, recipient, message.as_string())
-            except (smtplib.SMTPServerDisconnected, TimeoutError, OSError, smtplib.SMTPException):
-                self.connect()
-                self.server.sendmail(self.sender, recipient, message.as_string())
+            self.server.sendmail(self.sender, recipient, message.as_string())
             return 'accepted'
         def close(self):
             if self.server:
@@ -1082,9 +1185,32 @@ def send_certificates():
     else:
         out_fmt, out_ext = EMAIL_ATTACH_FORMATS[email_fmt_key]
 
+    job_id = data.get('jobId') or secrets.token_urlsafe(24)
+    if not isinstance(job_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{16,100}', job_id):
+        return jsonify(error='Invalid send job ID'), 400
+    owner = send_job_owner()
+    fingerprint = hashlib.sha256(json.dumps({k: v for k, v in data.items() if k not in ('jobId', 'smtpPassword')}, sort_keys=True).encode()).hexdigest()
+    lease = time.time() + 600
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        conn.execute('INSERT OR IGNORE INTO send_jobs (id, owner, fingerprint) VALUES (?, ?, ?)', (job_id, owner, fingerprint))
+        job = conn.execute('SELECT owner, fingerprint, completed, paused, lease FROM send_jobs WHERE id=?', (job_id,)).fetchone()
+        if job[0] != owner or job[1] != fingerprint:
+            return jsonify(error='Send job does not match this request'), 409
+        if job[4] > time.time():
+            return jsonify(error='The previous send is still finishing. Retry shortly.'), 409
+        conn.execute('UPDATE send_jobs SET lease=? WHERE id=?', (lease, job_id))
+        completed = json.loads(job[2])
+
+    def checkpoint(index, status):
+        completed[str(index)] = status
+        with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+            conn.execute('UPDATE send_jobs SET completed=?, lease=? WHERE id=?',
+                         (json.dumps(completed), time.time() + 600, job_id))
+
     def stream():
-        results = []
-        skipped = 0
+        results = [{'status': status} for status in completed.values() if status != 'skip']
+        skipped = sum(status == 'skip' for status in completed.values())
         service = _InlineEmailService()
 
         try:
@@ -1096,18 +1222,28 @@ def send_certificates():
                 service.connect()
                 yield f"data: {json.dumps({'type': 'status', 'message': 'Connected to mail server. Preparing emails...'})}\n\n"
             except Exception as e:
-                yield f"data: {json.dumps({'type': 'error', 'message': f'Email provider connection failed: {e}'})}\n\n"
+                yield f"data: {json.dumps({'type': 'retry' if retryable_mail_error(e) else 'error', 'message': f'Email connection failed: {e}'})}\n\n"
                 return
 
             total = len([p for p in participants if p.get('email')])
 
             for i, p in enumerate(participants):
+                if str(i) in completed:
+                    continue
+                with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+                    paused = conn.execute('SELECT paused FROM send_jobs WHERE id=?', (job_id,)).fetchone()[0]
+                    conn.execute('UPDATE send_jobs SET lease=? WHERE id=?', (time.time() + 600, job_id))
+                if paused:
+                    yield f"data: {json.dumps({'type': 'paused', 'message': 'Paused. Resume to continue from the next unsent row.'})}\n\n"
+                    return
                 email_addr = (p.get('email') or '').strip()
                 p_str1 = p.get('string1') or p.get('name', '')
                 p_str2 = p.get('string2') or p.get('department', '')
+                p_str3 = p.get('string3', '')
                 p_name = p_str1 or f"Participant {i + 1}"
                 if not email_addr:
                     skipped += 1
+                    checkpoint(i, 'skip')
                     yield f"data: {json.dumps({'type': 'skip', 'name': p_name, 'reason': 'no email'})}\n\n"
                     continue
 
@@ -1116,20 +1252,18 @@ def send_certificates():
                     progress_msg = f"Sending {i + 1}/{total}: {p_name} ({email_addr})..."
                     yield f"data: {json.dumps({'type': 'progress', 'name': p_name, 'email': email_addr, 'index': i + 1, 'total': total, 'message': progress_msg})}\n\n"
 
-                    personal_body = body.replace('{string1}', p_str1).replace('{name}', p_str1)\
-                                        .replace('{string2}', p_str2).replace('{department}', p_str2)
+                    personal_body = personalize(body, p)
 
                     msg = MIMEMultipart()
                     msg['From']    = f'{from_name} <{service.sender}>'
                     msg['To']      = email_addr
-                    msg['Subject'] = subject.replace('{string1}', p_str1).replace('{name}', p_str1)\
-                                            .replace('{string2}', p_str2).replace('{department}', p_str2)
+                    msg['Subject'] = personalize(subject, p)
                     msg.attach(MIMEText(personal_body, 'plain', 'utf-8'))
 
                     # Generate and attach certificate if template was provided and attachment is enabled
                     attach_cert_flag = data.get('attachCert', True)
                     if has_template and template_image and attach_cert_flag:
-                        cert = draw_certificate(template_image, p_str1, p_str2, settings)
+                        cert = draw_certificate(template_image, p_str1, p_str2, settings, str3=p_str3, values=p['values'])
 
                         # Convert to chosen attachment format
                         if out_fmt == 'PDF':
@@ -1156,10 +1290,15 @@ def send_certificates():
 
                     service.send(msg, email_addr)
 
+                    checkpoint(i, 'sent')
                     results.append({'name': p_name, 'status': 'sent'})
                     yield f"data: {json.dumps({'type': 'sent', 'name': p_name, 'email': email_addr, 'index': i + 1, 'total': total})}\n\n"
 
                 except Exception as e:
+                    if retryable_mail_error(e):
+                        yield f"data: {json.dumps({'type': 'retry', 'message': f'Temporary mail failure; retrying this row in 15 seconds: {e}'})}\n\n"
+                        return
+                    checkpoint(i, 'failed')
                     results.append({'name': p_name, 'status': 'failed', 'reason': str(e)})
                     yield f"data: {json.dumps({'type': 'failed', 'name': p_name, 'email': email_addr, 'reason': str(e)})}\n\n"
 
@@ -1171,9 +1310,433 @@ def send_certificates():
             yield f"data: {json.dumps({'type': 'error', 'message': f'Server error: {top_err}'})}\n\n"
         finally:
             service.close()
+            with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+                conn.execute('UPDATE send_jobs SET lease=0 WHERE id=?', (job_id,))
 
     return Response(stream_with_context(stream()), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+
+# ── Throttled Mailer — DB schema ──────────────────────────────────────────────
+
+def init_mailer_db():
+    """Create throttled-mailer tables if they don't exist yet."""
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mailer_queue (
+                id       INTEGER PRIMARY KEY AUTOINCREMENT,
+                email    TEXT    NOT NULL,
+                name     TEXT    NOT NULL DEFAULT '',
+                cert_path TEXT   NOT NULL DEFAULT '',
+                status   TEXT    NOT NULL DEFAULT 'pending',   -- pending | sent | failed
+                added_at INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS mailer_state (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            )
+        """)
+        conn.commit()
+
+init_mailer_db()
+
+
+def _mstate_get(key, default=None):
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        row = conn.execute('SELECT value FROM mailer_state WHERE key=?', (key,)).fetchone()
+    return row[0] if row else default
+
+
+def _mstate_set(key, value):
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute('INSERT OR REPLACE INTO mailer_state (key, value) VALUES (?,?)', (key, str(value)))
+        conn.commit()
+
+
+def _mstate_delete(key):
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute('DELETE FROM mailer_state WHERE key=?', (key,))
+        conn.commit()
+
+
+# ── Throttle constants (same as mailer/mailer_app.py) ─────────────────────────
+
+_TM_SEND_GAP_MIN  = 3 * 60    # 180 s
+_TM_SEND_GAP_MAX  = 5 * 60    # 300 s
+_TM_JITTER        = 0.30
+_TM_BATCH_MIN     = 15
+_TM_BATCH_MAX     = 20
+_TM_PAUSE_MIN     = 15 * 60   # 900 s
+_TM_PAUSE_MAX     = 25 * 60   # 1 500 s
+
+
+def _tm_jitter(base):
+    delta = base * _TM_JITTER
+    return base + random.uniform(-delta, delta)
+
+
+def _tm_send_gap():
+    return _tm_jitter(random.uniform(_TM_SEND_GAP_MIN, _TM_SEND_GAP_MAX))
+
+
+def _tm_batch_pause():
+    return _tm_jitter(random.uniform(_TM_PAUSE_MIN, _TM_PAUSE_MAX))
+
+
+# ── Mailer SMTP helper (uses env vars, same as existing _make_smtp_connection) ─
+
+_TM_GMAIL_USER = lambda: os.environ.get('GMAIL_USER', '')
+_TM_GMAIL_PASS = lambda: os.environ.get('GMAIL_APP_PASSWORD', '')
+_TM_SUBJECT    = lambda: os.environ.get('MAILER_SUBJECT', 'Your Certificate — CertFlow')
+_TM_BODY_HTML  = """\
+<html><body>
+<p>Dear <b>{name}</b>,</p>
+<p>Congratulations! Please find your certificate attached to this email.</p>
+<p>We appreciate your participation and look forward to seeing you again.</p>
+<br><p>Best regards,<br>The CertFlow Team</p>
+</body></html>"""
+_TM_BODY_TEXT  = ("Dear {name},\n\nCongratulations! Please find your certificate attached.\n\n"
+                  "Best regards,\nThe CertFlow Team")
+
+
+def _tm_send_one(recipient_id, email, name, cert_path):
+    """Send one certificate email via env-var Gmail credentials. Raises on failure."""
+    gmail_user = _TM_GMAIL_USER()
+    gmail_pass = _TM_GMAIL_PASS()
+    if not gmail_user or not gmail_pass:
+        raise RuntimeError('GMAIL_USER / GMAIL_APP_PASSWORD env vars are not set on this server.')
+
+    full_path = os.path.join(os.path.dirname(__file__), cert_path)
+    if not os.path.exists(full_path):
+        raise FileNotFoundError(f'Certificate not found: {cert_path}')
+
+    ext = os.path.splitext(cert_path)[1].lower()
+
+    msg = MIMEMultipart('mixed')
+    msg['Subject'] = _TM_SUBJECT()
+    msg['From']    = gmail_user
+    msg['To']      = email
+
+    alt = MIMEMultipart('alternative')
+    alt.attach(MIMEText(_TM_BODY_TEXT.format(name=name), 'plain', 'utf-8'))
+    alt.attach(MIMEText(_TM_BODY_HTML.format(name=name), 'html', 'utf-8'))
+    msg.attach(alt)
+
+    with open(full_path, 'rb') as fh:
+        data = fh.read()
+
+    cert_filename = os.path.basename(cert_path)
+    if ext == '.pdf':
+        part = MIMEApplication(data, _subtype='pdf')
+    elif ext == '.png':
+        from email.mime.image import MIMEImage
+        part = MIMEImage(data, _subtype='png')
+    elif ext in ('.jpg', '.jpeg'):
+        from email.mime.image import MIMEImage
+        part = MIMEImage(data, _subtype='jpeg')
+    else:
+        part = MIMEApplication(data)
+    part.add_header('Content-Disposition', 'attachment', filename=cert_filename)
+    msg.attach(part)
+
+    with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as smtp:
+        smtp.ehlo()
+        smtp.starttls()
+        smtp.ehlo()
+        smtp.login(gmail_user, gmail_pass)
+        smtp.sendmail(gmail_user, [email], msg.as_bytes())
+
+    logger.info('[ThrottledMailer] Sent certificate to %s (%s)', email, name)
+
+
+# ── Throttled Mailer Routes ───────────────────────────────────────────────────
+
+@app.route('/mailer/load-queue', methods=['POST'])
+@login_required
+@limiter.limit('20 per minute')
+def mailer_load_queue():
+    """
+    Replace the mailer queue from a JSON array POSTed from the browser.
+    Each entry: {email, name, cert_path}
+    Resets all throttle state so a fresh run starts immediately.
+    """
+    require_csrf()
+    data = request.json or {}
+    entries = data.get('queue', [])
+    if not isinstance(entries, list) or not entries:
+        return jsonify({'success': False, 'error': 'Provide a non-empty queue array.'}), 400
+    if len(entries) > MAX_PARTICIPANTS:
+        return jsonify({'success': False, 'error': f'At most {MAX_PARTICIPANTS} entries allowed.'}), 400
+
+    cleaned = []
+    for i, e in enumerate(entries, 1):
+        em = validate_email(str(e.get('email') or ''))
+        nm = str(e.get('name') or '').strip()[:MAX_NAME_LENGTH]
+        cp = str(e.get('cert_path') or '').strip()
+        if not em:
+            return jsonify({'success': False, 'error': f'Row {i}: invalid email.'}), 400
+        if not nm:
+            return jsonify({'success': False, 'error': f'Row {i}: name is required.'}), 400
+        cleaned.append((em, nm, cp))
+
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute('DELETE FROM mailer_queue')
+        conn.executemany(
+            'INSERT INTO mailer_queue (email, name, cert_path, status) VALUES (?,?,?,?)',
+            [(em, nm, cp, 'pending') for em, nm, cp in cleaned]
+        )
+        conn.commit()
+
+    # Reset all throttle state
+    for key in ('tm_last_sent_at', 'tm_batch_count', 'tm_batch_size',
+                'tm_batch_started_at', 'tm_next_gap', 'tm_in_batch_pause', 'tm_pause_deadline', 'tm_manual_pause', 'tm_retry_at'):
+        _mstate_delete(key)
+
+    logger.info('[ThrottledMailer] Queue loaded: %d recipients', len(cleaned))
+    return jsonify({'success': True, 'loaded': len(cleaned)})
+
+
+@app.route('/mailer/control', methods=['POST'])
+@login_required
+@limiter.limit('30 per minute')
+def mailer_control():
+    require_csrf()
+    action = (request.get_json(silent=True) or {}).get('action')
+    if action not in ('pause', 'resume'):
+        return jsonify(error='Invalid action'), 400
+    _mstate_set('tm_manual_pause', '1' if action == 'pause' else '0')
+    return jsonify(success=True)
+
+
+@app.route('/mailer/send-next')
+@limiter.limit('30 per minute')
+def mailer_send_next():
+    """
+    Throttled send endpoint. Called by cron-job.org every 4–5 min OR via the
+    in-app "Trigger Next Send" button (which passes the session cookie).
+    Two auth paths:
+      1. Session login  — already authenticated via browser
+      2. ?secret=MAILER_SECRET — for external cron callers
+    """
+    # Auth: session OR secret param
+    mailer_secret = os.environ.get('MAILER_SECRET', '')
+    via_secret = mailer_secret and request.args.get('secret', '') == mailer_secret
+    via_session = bool(session.get('authenticated'))
+    if not via_secret and not via_session:
+        return jsonify({'status': 'forbidden'}), 403
+
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute('BEGIN IMMEDIATE')
+        current = conn.execute("SELECT value FROM mailer_state WHERE key='tm_send_lease'").fetchone()
+        if current and float(current[0]) > time.time():
+            return jsonify(status='sending')
+        conn.execute("INSERT OR REPLACE INTO mailer_state VALUES ('tm_send_lease', ?)", (str(time.time() + 600),))
+    try:
+        return _mailer_send_next_locked()
+    finally:
+        _mstate_delete('tm_send_lease')
+
+
+def _mailer_send_next_locked():
+    if _mstate_get('tm_manual_pause') == '1':
+        return jsonify(status='manual_pause')
+    if float(_mstate_get('tm_retry_at', 0)) > time.time():
+        return jsonify(status='retry_wait')
+    now = time.time()
+
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        total = conn.execute('SELECT COUNT(*) FROM mailer_queue').fetchone()[0]
+        sent_count = conn.execute("SELECT COUNT(*) FROM mailer_queue WHERE status='sent'").fetchone()[0]
+        next_row = conn.execute(
+            "SELECT * FROM mailer_queue WHERE status='pending' ORDER BY id LIMIT 1"
+        ).fetchone()
+
+    if not next_row:
+        return jsonify({'status': 'done', 'total_sent': sent_count, 'total': total})
+
+    # ── Inter-batch pause check ────────────────────────────────────────────────
+    if _mstate_get('tm_in_batch_pause') == '1':
+        deadline = float(_mstate_get('tm_pause_deadline', 0))
+        remaining = deadline - now
+        if remaining > 0:
+            return jsonify({
+                'status': 'paused',
+                'reason': 'inter-batch cooldown',
+                'resume_in_seconds': round(remaining),
+                'resume_in_minutes': round(remaining / 60, 1),
+                'sent': sent_count,
+                'remaining': total - sent_count,
+            })
+        # Pause over — reset batch
+        _mstate_set('tm_in_batch_pause', '0')
+        _mstate_set('tm_batch_count', '0')
+        _mstate_set('tm_batch_size', str(random.randint(_TM_BATCH_MIN, _TM_BATCH_MAX)))
+        _mstate_set('tm_batch_started_at', str(now))
+        _mstate_set('tm_next_gap', str(_tm_send_gap()))
+
+    # ── Per-email gap check ────────────────────────────────────────────────────
+    last_sent = float(_mstate_get('tm_last_sent_at', 0))
+    if last_sent > 0:
+        next_gap = float(_mstate_get('tm_next_gap', _TM_SEND_GAP_MAX))
+        elapsed  = now - last_sent
+        if elapsed < next_gap:
+            wait = next_gap - elapsed
+            return jsonify({
+                'status': 'wait',
+                'next_allowed_in_seconds': round(wait),
+                'next_allowed_in_minutes': round(wait / 60, 1),
+                'sent': sent_count,
+                'remaining': total - sent_count,
+            })
+
+    # ── Send ───────────────────────────────────────────────────────────────────
+    rid   = next_row['id']
+    email = next_row['email']
+    name  = next_row['name']
+    cpath = next_row['cert_path']
+
+    try:
+        _tm_send_one(rid, email, name, cpath)
+    except Exception as exc:
+        if retryable_mail_error(exc):
+            _mstate_set('tm_retry_at', time.time() + 60)
+            return jsonify(status='retry_wait', reason=str(exc), to=email), 503
+        logger.error('[ThrottledMailer] SMTP failure for %s: %s', email, exc)
+        with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+            conn.execute("UPDATE mailer_queue SET status='failed' WHERE id=?", (rid,))
+            conn.commit()
+        return jsonify({'status': 'error', 'reason': str(exc), 'to': email}), 500
+
+    # ── Update state ──────────────────────────────────────────────────────────
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute("UPDATE mailer_queue SET status='sent' WHERE id=?", (rid,))
+        conn.commit()
+
+    batch_count = int(_mstate_get('tm_batch_count', 0)) + 1
+    batch_size  = int(_mstate_get('tm_batch_size', random.randint(_TM_BATCH_MIN, _TM_BATCH_MAX)))
+    _mstate_set('tm_batch_count', batch_count)
+    _mstate_set('tm_last_sent_at', now)
+    _mstate_set('tm_next_gap', str(_tm_send_gap()))
+
+    hit_batch_limit = batch_count >= batch_size
+    if hit_batch_limit:
+        # Check if there are more pending
+        with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+            more = conn.execute("SELECT 1 FROM mailer_queue WHERE status='pending' LIMIT 1").fetchone()
+        if more:
+            pause = _tm_batch_pause()
+            _mstate_set('tm_in_batch_pause', '1')
+            _mstate_set('tm_pause_deadline', str(now + pause))
+            logger.info('[ThrottledMailer] Batch of %d done — pausing %.1f min', batch_count, pause / 60)
+
+    new_sent = sent_count + 1
+    return jsonify({
+        'status': 'sent',
+        'to': email,
+        'name': name,
+        'sent': new_sent,
+        'remaining': total - new_sent,
+        'batch_count': batch_count,
+        'batch_size': batch_size,
+        'batch_limit_hit': hit_batch_limit,
+        'next_send_in_seconds': round(float(_mstate_get('tm_next_gap', _TM_SEND_GAP_MAX))) if not hit_batch_limit else None,
+    })
+
+
+@app.route('/mailer/status')
+@login_required
+@limiter.limit('60 per minute')
+def mailer_status():
+    """Read-only status view for the throttled mailer. No email sent."""
+    now = time.time()
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.row_factory = sqlite3.Row
+        total     = conn.execute('SELECT COUNT(*) FROM mailer_queue').fetchone()[0]
+        sent      = conn.execute("SELECT COUNT(*) FROM mailer_queue WHERE status='sent'").fetchone()[0]
+        pending   = conn.execute("SELECT COUNT(*) FROM mailer_queue WHERE status='pending'").fetchone()[0]
+        failed    = conn.execute("SELECT COUNT(*) FROM mailer_queue WHERE status='failed'").fetchone()[0]
+        # Preview rows around current index (last 3 sent + next 5 pending)
+        recent    = conn.execute(
+            "SELECT id,email,name,status FROM mailer_queue WHERE status='sent' ORDER BY id DESC LIMIT 3"
+        ).fetchall()
+        upcoming  = conn.execute(
+            "SELECT id,email,name,status FROM mailer_queue WHERE status IN ('pending','failed') ORDER BY id LIMIT 6"
+        ).fetchall()
+
+    in_pause  = _mstate_get('tm_in_batch_pause') == '1'
+    deadline  = float(_mstate_get('tm_pause_deadline', 0))
+    last_sent = float(_mstate_get('tm_last_sent_at', 0))
+    next_gap  = float(_mstate_get('tm_next_gap', _TM_SEND_GAP_MAX))
+    b_count   = int(_mstate_get('tm_batch_count', 0))
+    b_size    = int(_mstate_get('tm_batch_size', 0))
+
+    next_in = None
+    status_label = 'idle'
+
+    if total == 0:
+        status_label = 'empty'
+    elif pending == 0 and failed == 0:
+        status_label = 'done'
+    elif _mstate_get('tm_manual_pause') == '1':
+        status_label = 'manual_pause'
+    elif float(_mstate_get('tm_retry_at', 0)) > now:
+        status_label = 'retry_wait'
+    elif in_pause:
+        status_label = 'paused'
+        next_in = max(deadline - now, 0)
+    elif last_sent > 0:
+        elapsed = now - last_sent
+        wait = next_gap - elapsed
+        if wait > 0:
+            status_label = 'waiting'
+            next_in = wait
+        else:
+            status_label = 'ready'
+    elif pending > 0:
+        status_label = 'ready'
+
+    def _row(r):
+        return {'id': r['id'], 'email': r['email'], 'name': r['name'], 'status': r['status']}
+
+    return jsonify({
+        'status': status_label,
+        'total': total,
+        'sent': sent,
+        'pending': pending,
+        'failed': failed,
+        'batch_count': b_count,
+        'batch_size': b_size,
+        'in_batch_pause': in_pause,
+        'next_send_in_seconds': round(next_in) if next_in is not None else None,
+        'next_send_in_minutes': round(next_in / 60, 1) if next_in is not None else None,
+        'last_sent_at': last_sent,
+        'recent': [_row(r) for r in recent],
+        'upcoming': [_row(r) for r in upcoming],
+        'gmail_configured': bool(_TM_GMAIL_USER() and _TM_GMAIL_PASS()),
+    })
+
+
+@app.route('/mailer/reset', methods=['POST'])
+@login_required
+@limiter.limit('5 per minute')
+def mailer_reset():
+    """Hard-reset: clear all queue rows and throttle state."""
+    require_csrf()
+    data = request.json or {}
+    if data.get('confirm') != 'yes':
+        return jsonify({'success': False, 'error': 'Send {confirm: "yes"} to reset.'}), 400
+    with closing(sqlite3.connect(DB_PATH)) as conn, conn:
+        conn.execute('DELETE FROM mailer_queue')
+        conn.commit()
+    for key in ('tm_last_sent_at', 'tm_batch_count', 'tm_batch_size',
+                'tm_batch_started_at', 'tm_next_gap', 'tm_in_batch_pause', 'tm_pause_deadline', 'tm_manual_pause', 'tm_retry_at'):
+        _mstate_delete(key)
+    logger.info('[ThrottledMailer] Queue and state reset by %s', session.get('username'))
+    return jsonify({'success': True, 'message': 'Queue and state cleared.'})
 
 
 if __name__ == '__main__':

@@ -421,12 +421,23 @@ input[type="color"] {
     border: 1px solid var(--border);
 }
 
-.template-preview {
+ .template-preview {
     max-width: 280px;
     margin-top: 12px;
     border-radius: var(--radius);
     border: 1px solid var(--border);
 }
+
+ .template-preview.pdf-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 80px;
+    color: var(--text-secondary);
+    font-style: italic;
+    border-style: dashed;
+}
+
 
 /* Bulk Certificate Editor */
 .bulk-upload-grid {
@@ -768,4 +779,178 @@ input[type="color"] {
 .toggle-switch input:focus-visible + .toggle-slider {
     outline: 2px solid var(--primary);
     outline-offset: 2px;
+}
+
+/* ── Throttled Mailer Panel ─────────────────────────────────── */
+.mailer-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 12px;
+    margin-bottom: 20px;
+}
+
+.stat-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px 16px;
+    text-align: center;
+}
+
+.stat-card .stat-value {
+    font-size: 26px;
+    font-weight: 700;
+    color: var(--primary);
+    line-height: 1.1;
+}
+
+.stat-card .stat-label {
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 4px;
+}
+
+.mailer-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: var(--radius);
+    background: var(--accent);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    margin-bottom: 16px;
+}
+
+.pulse-dot {
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.pulse-dot.active {
+    background: var(--success);
+    animation: pulse-ring 1.6s ease-out infinite;
+}
+
+.pulse-dot.paused {
+    background: #f59e0b;
+}
+
+.pulse-dot.done {
+    background: var(--primary);
+}
+
+@keyframes pulse-ring {
+    0%   { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5); }
+    70%  { box-shadow: 0 0 0 7px rgba(22, 163, 74, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+}
+
+.queue-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    margin-top: 12px;
+}
+
+.queue-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.queue-table th {
+    background: var(--accent);
+    padding: 8px 12px;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+}
+
+.queue-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.queue-table tr:last-child td {
+    border-bottom: none;
+}
+
+.queue-table tr.row-sent td:first-child {
+    border-left: 3px solid var(--success);
+}
+
+.queue-table tr.row-current td:first-child {
+    border-left: 3px solid var(--primary);
+}
+
+.queue-table tr.row-pending td:first-child {
+    border-left: 3px solid transparent;
+}
+
+.queue-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.queue-badge.sent    { background: var(--success-bg); color: var(--success); border: 1px solid var(--success-border); }
+.queue-badge.next    { background: #eff6ff; color: var(--primary); border: 1px solid #bfdbfe; }
+.queue-badge.pending { background: var(--accent); color: var(--text-muted); border: 1px solid var(--border); }
+.queue-badge.paused  { background: #fffbeb; color: #92400e; border: 1px solid #fde68a; }
+
+.mailer-actions {
+    display: flex;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-top: 16px;
+}
+
+.throttle-info-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 12px;
+    font-size: 12px;
+}
+
+.throttle-info-grid .ti-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: var(--accent);
+    border-radius: 6px;
+    border: 1px solid var(--border);
+}
+
+.throttle-info-grid .ti-label {
+    color: var(--text-secondary);
+}
+
+.throttle-info-grid .ti-val {
+    font-weight: 600;
+    color: var(--text);
+}
+
+@media (max-width: 640px) {
+    .throttle-info-grid { grid-template-columns: 1fr; }
+    .mailer-stats { grid-template-columns: repeat(3, 1fr); }
 }

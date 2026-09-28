@@ -20,6 +20,7 @@
                 <nav class="nav-links" aria-label="Primary">
                     <a class="nav-link active" href="/">Generator</a>
                     <a class="nav-link" href="/bulk-editor">Bulk Certificate Editor</a>
+                    <a class="nav-link" href="#throttled-mailer-section" id="navThrottledMailer">Throttled Mailer</a>
                     <form method="post" action="/logout" style="display:inline"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="nav-link" type="submit" style="border:0;background:none;cursor:pointer">Log out</button></form>
                 </nav>
             </div>
@@ -33,7 +34,7 @@
                 <svg class="upload-icon" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto 8px auto; display:block; color:var(--text-secondary);"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
                 <p>Click or drag to upload certificate template</p>
                 <p class="hint">PNG, JPG, WebP, BMP, TIFF, GIF (leave blank if only emailing QR codes/confirmations)</p>
-                <input type="file" id="templateFile" accept="image/png,image/jpeg,image/webp,image/bmp,image/tiff,image/gif">
+                <input type="file" id="templateFile" accept="image/png,image/jpeg,image/webp,image/bmp,image/tiff,image/gif,application/pdf">
             </div>
             <div class="preview" id="templatePreview"></div>
         </div>
@@ -46,7 +47,7 @@
             <div class="upload-area" id="csvUpload" style="padding: 18px;">
                 <svg class="upload-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto 8px auto; display:block; color:var(--text-secondary);"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><path d="M8 13h2"/><path d="M8 17h2"/><path d="M14 13h2"/><path d="M14 17h2"/></svg>
                 <p>Click or drag a CSV file here</p>
-                <p class="hint">Columns: String 1, String 2, Email ID &nbsp;(header row optional)</p>
+                <p class="hint">Columns: String 1, String 2, String 3, Email ID &nbsp;(header row optional)</p>
                 <input type="file" id="csvFile" accept=".csv">
             </div>
             <div id="csvStatus" style="display:none;">
@@ -56,79 +57,21 @@
             <div class="divider">or</div>
 
             <h3>Paste manually</h3>
-            <textarea id="participantData" placeholder="John Doe, Computer Science, john@example.com
-Jane Smith, ECE, jane@example.com
-Robert Kumar, AI &amp; DS, robert@example.com"></textarea>
-            <p style="margin-top:6px; font-size:12px; color:var(--text-muted);">String 1, String 2, Email ID — one per line. Email ID is optional for generation, required for auto-send.</p>
+            <label for="csvHeaderMode">CSV header row</label>
+            <select id="csvHeaderMode"><option value="auto">Detect automatically</option><option value="yes">First row contains column names</option><option value="no">No header row</option></select>
+            <textarea id="participantData" placeholder="John Doe, Computer Science, Distinction, john@example.com
+Jane Smith, ECE, Merit, jane@example.com
+Robert Kumar, AI &amp; DS, Participation, robert@example.com"></textarea>
+            <p style="margin-top:6px; font-size:12px; color:var(--text-muted);">Use any number of text columns. Name the email column Email, or place email addresses last without a header. Email is optional for generation.</p>
         </div>
 
         <!-- Step 3: Text placement -->
         <div class="section">
             <div class="section-title">Step 3 — Text Placement</div>
 
-            <h3>String 1</h3>
-            <div class="controls">
-                <div class="control-group">
-                    <label>X Position (px)</label>
-                    <input type="number" id="nameX" value="420">
-                </div>
-                <div class="control-group">
-                    <label>Y Position (px)</label>
-                    <input type="number" id="nameY" value="270">
-                </div>
-                <div class="control-group">
-                    <label>Font Size (px)</label>
-                    <input type="number" id="nameFontSize" value="38">
-                </div>
-                <div class="control-group">
-                    <label>Font</label>
-                    <select id="nameFont">
-                        <option value="georgia.ttf">Georgia</option>
-                        <option value="times.ttf">Times New Roman</option>
-                        <option value="arial.ttf">Arial</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label>Color</label>
-                    <input type="color" id="nameColor" value="#000000">
-                </div>
-                <div class="control-group">
-                    <label>Bold</label>
-                    <input type="checkbox" id="nameBold" style="margin-top: 8px;">
-                </div>
-            </div>
-
-            <h3>String 2</h3>
-            <div class="controls">
-                <div class="control-group">
-                    <label>X Position (px)</label>
-                    <input type="number" id="deptX" value="76">
-                </div>
-                <div class="control-group">
-                    <label>Y Position (px)</label>
-                    <input type="number" id="deptY" value="303">
-                </div>
-                <div class="control-group">
-                    <label>Font Size (px)</label>
-                    <input type="number" id="deptFontSize" value="32">
-                </div>
-                <div class="control-group">
-                    <label>Font</label>
-                    <select id="deptFont">
-                        <option value="georgia.ttf">Georgia</option>
-                        <option value="times.ttf">Times New Roman</option>
-                        <option value="arial.ttf">Arial</option>
-                    </select>
-                </div>
-                <div class="control-group">
-                    <label>Color</label>
-                    <input type="color" id="deptColor" value="#000000">
-                </div>
-                <div class="control-group">
-                    <label>Bold</label>
-                    <input type="checkbox" id="deptBold" style="margin-top: 8px;">
-                </div>
-            </div>
+            <p>Select the CSV columns to print. Add or remove text fields and set each position and style.</p>
+            <div id="textFields"></div>
+            <button type="button" class="btn btn-secondary" id="addTextField">Add text field</button>
 
             <button class="btn btn-secondary" id="previewBtn" disabled>Preview First Certificate</button>
         </div>
@@ -234,7 +177,7 @@ Congratulations! Please find your details/certificate attached.
 
 Regards,
 CertFlow</textarea>
-                <p style="margin-top:4px; font-size:12px; color:var(--text-muted);">Use <code><b>{string1}</b></code> (or <code>{name}</code>) for col 1 and <code><b>{string2}</b></code> (or <code>{department}</code>) for col 2.</p>
+                <p style="margin-top:4px; font-size:12px; color:var(--text-muted);">Use <code><b>{string1}</b></code> (or <code>{name}</code>) for col 1, <code><b>{string2}</b></code> (or <code>{department}</code>) for col 2, and <code><b>{string3}</b></code>, <code><b>{string4}</b></code>, etc. for additional columns.</p>
                 <div id="emailPreviewBox" style="display:none; margin-top:8px; padding:10px 12px; background:var(--bg); border:1px solid var(--border); border-radius:var(--radius); font-size:12px;">
                     <div style="color:var(--text-muted); font-size:11px; margin-bottom:4px; text-transform:uppercase; letter-spacing:0.05em;">Preview for first participant</div>
                     <div style="color:var(--primary); font-size:12px; margin-bottom:2px; font-weight:500;">Subject: <span id="previewSubjectText" style="color:var(--text); font-weight:normal;"></span></div>
@@ -301,6 +244,9 @@ CertFlow</textarea>
             </div>
 
             <button class="btn btn-primary" id="sendBtn" style="margin-top:14px;" disabled>Send Automated Certificates via Email</button>
+            <button type="button" class="btn btn-secondary" id="pauseSendBtn" disabled>Pause</button>
+            <button type="button" class="btn btn-secondary" id="resumeSendBtn" disabled>Resume</button>
+            <p>Keep this page open to retry automatically. Pause finishes the current email first. If the mail server accepts an email but its acknowledgement is lost, retrying may deliver that email twice.</p>
 
             <!-- Live send log -->
             <div id="sendProgress" style="display:none; margin-top:16px;">
@@ -317,6 +263,84 @@ CertFlow</textarea>
                 </div>
                 <div class="send-log" id="sendLog"></div>
             </div>
+        </div>
+
+        <!-- Step 6: Throttled Mailer -->
+        <div class="section" id="throttled-mailer-section">
+            <div class="section-title">Step 6 — Throttled Mailer <span class="badge" style="font-size:11px;margin-left:8px;opacity:0.8;">Gmail-safe queue</span></div>
+
+            <div class="info-box" style="margin-bottom:16px;">
+                Sends <strong>one email at a time</strong>, spaced 3–5 min apart with ±30 % jitter and a 15–25 min
+                break every 15–20 emails. State is persisted in the app's SQLite database so restarts never
+                re-send already-delivered certificates. Wire up a free
+                <a href="https://cron-job.org" target="_blank" rel="noopener">cron-job.org</a>
+                job pointing at <code>/mailer/send-next?secret=MAILER_SECRET</code> every 4 minutes to
+                drive delivery automatically.
+            </div>
+
+            <!-- Gmail config notice -->
+            <div id="mailerGmailNotice" class="alert" style="display:none;margin-bottom:14px;"></div>
+
+            <!-- Progress stats -->
+            <div class="mailer-stats" id="mailerStats">
+                <div class="stat-card"><div class="stat-value" id="statTotal">—</div><div class="stat-label">Total</div></div>
+                <div class="stat-card"><div class="stat-value" id="statSent" style="color:var(--success);">—</div><div class="stat-label">Sent</div></div>
+                <div class="stat-card"><div class="stat-value" id="statPending">—</div><div class="stat-label">Pending</div></div>
+                <div class="stat-card"><div class="stat-value" id="statFailed" style="color:var(--error);">—</div><div class="stat-label">Failed</div></div>
+                <div class="stat-card"><div class="stat-value" id="statBatch">—</div><div class="stat-label">Batch</div></div>
+            </div>
+
+            <!-- Live status bar -->
+            <div class="mailer-status-bar" id="mailerStatusBar">
+                <div class="pulse-dot" id="mailerPulseDot"></div>
+                <span id="mailerStatusText">Load a queue to begin.</span>
+            </div>
+
+            <!-- Throttle info grid -->
+            <div class="throttle-info-grid">
+                <div class="ti-row"><span class="ti-label">Email gap</span><span class="ti-val">3–5 min ± 30 % jitter</span></div>
+                <div class="ti-row"><span class="ti-label">Batch size</span><span class="ti-val">15–20 emails</span></div>
+                <div class="ti-row"><span class="ti-label">Batch pause</span><span class="ti-val">15–25 min ± 30 % jitter</span></div>
+                <div class="ti-row"><span class="ti-label">100 emails ≈</span><span class="ti-val">5–6 hours total</span></div>
+            </div>
+
+            <!-- Load queue from CSV / JSON -->
+            <h3 style="margin-top:20px; margin-bottom:8px;">Load Queue</h3>
+            <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">
+                Upload a CSV (<code>name,email,cert_path</code>) or JSON array
+                (<code>[{"name":"…","email":"…","cert_path":"output_certs/…"}]</code>).
+                <code>cert_path</code> is relative to the server's project root.
+            </p>
+            <div class="upload-area" id="mailerQueueUpload" style="padding:16px;">
+                <svg class="upload-icon" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="margin:0 auto 8px auto;display:block;color:var(--text-secondary);"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+                <p>Click or drag a CSV or JSON file</p>
+                <p class="hint">CSV columns: name, email, cert_path (header row optional)</p>
+                <input type="file" id="mailerQueueFile" accept=".csv,.json,text/csv,application/json">
+            </div>
+            <div id="mailerLoadStatus" style="font-size:13px;margin-top:8px;"></div>
+
+            <!-- Queue preview table -->
+            <div id="mailerQueuePreviewWrap" style="display:none;">
+                <h3 style="margin-top:20px;margin-bottom:8px;">Queue Preview</h3>
+                <div class="queue-table-wrap">
+                    <table class="queue-table" id="mailerQueueTable">
+                        <thead><tr><th>#</th><th>Name</th><th>Email</th><th>Cert Path</th><th>Status</th></tr></thead>
+                        <tbody id="mailerQueueTbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Action buttons -->
+            <div class="mailer-actions">
+                <button class="btn btn-primary" id="mailerTriggerBtn" type="button">⚡ Trigger Next Send</button>
+                <button type="button" class="btn btn-secondary" id="mailerPauseBtn">Pause</button>
+                <button type="button" class="btn btn-secondary" id="mailerResumeBtn">Resume</button>
+                <button class="btn btn-secondary" id="mailerRefreshBtn" type="button">↻ Refresh Status</button>
+                <button class="btn btn-secondary" id="mailerResetBtn" type="button" style="color:var(--error);border-color:var(--error-border);">✕ Clear Queue</button>
+            </div>
+
+            <!-- Last API response (debug) -->
+            <div id="mailerLastResponse" style="display:none;margin-top:14px;padding:10px 12px;background:var(--accent);border:1px solid var(--border);border-radius:var(--radius);font-size:12px;font-family:monospace;white-space:pre-wrap;word-break:break-all;"></div>
         </div>
 
     </div>
@@ -372,10 +396,11 @@ CertFlow</textarea>
             updateSendBtnState();
         });
 
+        let activeSendPayload = null, sendPaused = false, sendRunning = false, retryTimer = null;
         // ── Template upload ───────────────────────────────────────────────────
         const templateUpload = document.getElementById('templateUpload');
         const templateFile   = document.getElementById('templateFile');
-        const ALLOWED_TYPES  = ['image/png','image/jpeg','image/webp','image/bmp','image/tiff','image/gif'];
+        const ALLOWED_TYPES  = ['image/png','image/jpeg','image/webp','image/bmp','image/tiff','image/gif','application/pdf'];
 
         templateUpload.addEventListener('click', () => templateFile.click());
         templateUpload.addEventListener('dragover', e => { e.preventDefault(); templateUpload.classList.add('dragover'); });
@@ -390,6 +415,7 @@ CertFlow</textarea>
         function updateSendBtnState() {
             const list = parseParticipants();
             const sendBtn = document.getElementById('sendBtn');
+            if (activeSendPayload) { sendBtn.disabled = true; return; }
             const previewBtn = document.getElementById('previewBtn');
             const generateBtn = document.getElementById('generateBtn');
 
@@ -441,8 +467,13 @@ CertFlow</textarea>
             const reader = new FileReader();
             reader.onload = e => {
                 templateImage = e.target.result;
-                document.getElementById('templatePreview').innerHTML =
-                    `<img src="${e.target.result}" class="template-preview" alt="Template">`;
+                const preview = document.getElementById('templatePreview');
+                if (file && file.type === 'application/pdf') {
+                    preview.innerHTML = '<div class="template-preview pdf-placeholder">PDF template loaded</div>';
+                } else {
+                    preview.innerHTML =
+                        `<img src="${e.target.result}" class="template-preview" alt="Template">`;
+                }
                 updateSendBtnState();
             };
             reader.readAsDataURL(file);
@@ -462,19 +493,25 @@ CertFlow</textarea>
         });
         csvFile.addEventListener('change', e => { if (e.target.files[0]) loadCSV(e.target.files[0]); });
 
+        let csvRequestVersion = 0;
         async function loadCSV(file) {
+            const version = ++csvRequestVersion;
             const fd = new FormData();
             fd.append('csvFile', file);
+            fd.append('headerMode', document.getElementById('csvHeaderMode').value);
             try {
                 const res    = await fetch('/parse-csv', { method: 'POST', body: fd });
                 const result = await res.json();
+                if (version !== csvRequestVersion) return;
                 if (result.success) {
                     csvParticipants = result.participants;
+                    setColumns(result.columns);
                     document.getElementById('csvStatus').style.display = 'block';
                     document.getElementById('csvCount').textContent   = result.count;
-                    document.getElementById('participantData').value  = '';
+                    if (file.name !== 'pasted.csv') document.getElementById('participantData').value = '';
                     updateSendBtnState(); updateEmailPreview();
                 } else {
+                    csvParticipants = []; setColumns([]); updateSendBtnState();
                     alert('CSV error: ' + result.error);
                 }
             } catch (err) { alert('Upload error: ' + err.message); }
@@ -512,15 +549,26 @@ CertFlow</textarea>
             reader.readAsDataURL(f);
         }
 
-        document.getElementById('participantData').addEventListener('input', () => { updateSendBtnState(); updateEmailPreview(); });
+        let pasteTimer;
+        document.getElementById('participantData').addEventListener('input', () => {
+            clearTimeout(pasteTimer);
+            csvParticipants = [];
+            ++csvRequestVersion;
+            updateSendBtnState(); updateEmailPreview();
+            pasteTimer = setTimeout(() => loadCSV(new File([document.getElementById('participantData').value], 'pasted.csv', {type: 'text/csv'})), 400);
+        });
+        document.getElementById('csvHeaderMode').addEventListener('change', () => {
+            const pasted = document.getElementById('participantData').value;
+            if (pasted.trim()) loadCSV(new File([pasted], 'pasted.csv', {type: 'text/csv'}));
+            else if (csvFile.files[0]) loadCSV(csvFile.files[0]);
+        });
 
         // ── Live email preview ────────────────────────────────────────────────
-        function applyPlaceholders(text, str1, str2) {
-            return text
-                .replace(/\{string1\}/g, str1)
-                .replace(/\{name\}/g, str1)
-                .replace(/\{string2\}/g, str2)
-                .replace(/\{department\}/g, str2);
+        function applyPlaceholders(text, participant) {
+            return text.replace(/\{(name|department|string\d+)\}/g, (_, key) => {
+                if (key.startsWith('string')) return participant.values?.[Number(key.slice(6)) - 1] || '';
+                return participant[key] || '';
+            });
         }
 
         function updateEmailPreview() {
@@ -530,53 +578,68 @@ CertFlow</textarea>
             const p    = list[0];
             const str1 = p.string1 || p.name || '';
             const str2 = p.string2 || p.department || '';
+            const str3 = p.string3 || '';
             const subj = document.getElementById('emailSubject').value;
             const body = document.getElementById('emailBody').value;
-            document.getElementById('previewSubjectText').textContent = applyPlaceholders(subj, str1, str2);
-            document.getElementById('previewBodyText').textContent    = applyPlaceholders(body, str1, str2);
+            document.getElementById('previewSubjectText').textContent = applyPlaceholders(subj, p);
+            document.getElementById('previewBodyText').textContent    = applyPlaceholders(body, p);
             box.style.display = '';
         }
 
         document.getElementById('emailSubject').addEventListener('input', updateEmailPreview);
         document.getElementById('emailBody').addEventListener('input', updateEmailPreview);
 
-        function parseParticipants() {
-            if (csvParticipants.length > 0) return csvParticipants;
-            const raw = document.getElementById('participantData').value.trim();
-            if (!raw) return [];
-            return raw.split('\n').filter(l => l.trim()).map(line => {
-                const parts = line.split(',').map(p => p.trim());
-                const str1 = parts[0] || '';
-                const str2 = parts[1] || '';
-                const email = parts[2] || '';
-                return { string1: str1, string2: str2, name: str1, department: str2, email: email };
-            }).filter(p => p.string1 || p.name);
-        }
+        function parseParticipants() { return csvParticipants; }
 
-        function getSettings() {
-            return {
-                nameX: document.getElementById('nameX').value,
-                nameY: document.getElementById('nameY').value,
-                nameFontSize: document.getElementById('nameFontSize').value,
-                nameFont: document.getElementById('nameFont').value,
-                nameColor: document.getElementById('nameColor').value,
-                nameBold: document.getElementById('nameBold').checked,
-                deptX: document.getElementById('deptX').value,
-                deptY: document.getElementById('deptY').value,
-                deptFontSize: document.getElementById('deptFontSize').value,
-                deptFont: document.getElementById('deptFont').value,
-                deptColor: document.getElementById('deptColor').value,
-                deptBold: document.getElementById('deptBold').checked,
-                exportFormat: document.getElementById('exportFormat').value,
+        let csvColumns = [];
+        function setColumns(columns) {
+            const changed = JSON.stringify(columns) !== JSON.stringify(csvColumns);
+            csvColumns = columns;
+            if (changed) {
+                document.getElementById('textFields').replaceChildren();
+                columns.forEach((_, i) => addTextField(i));
+            }
+            document.getElementById('addTextField').disabled = !columns.length;
+        }
+        function addTextField(column = 0) {
+            const card = document.createElement('div');
+            card.className = 'controls';
+            const add = (title, key, type, value, choices) => {
+                const group = document.createElement('label');
+                group.className = 'control-group'; group.textContent = title;
+                const input = document.createElement(choices ? 'select' : 'input');
+                input.dataset.key = key;
+                if (choices) choices.forEach(([v, label]) => input.add(new Option(label, v)));
+                else input.type = type;
+                if (type === 'checkbox') input.checked = !!value;
+                else input.value = value;
+                group.append(input); card.append(group);
             };
+            add('CSV column', 'column', '', column, csvColumns.map((c, i) => [i, `${c} — {string${i + 1}}`]));
+            add('X (px)', 'X', 'number', column === 0 ? 420 : 76);
+            add('Y (px)', 'Y', 'number', 270 + column * 35);
+            add('Font size', 'FontSize', 'number', column === 0 ? 38 : 32);
+            add('Font', 'Font', '', 'georgia.ttf', [['georgia.ttf', 'Georgia'], ['times.ttf', 'Times New Roman'], ['arial.ttf', 'Arial']]);
+            add('Color', 'Color', 'color', '#000000');
+            add('Bold', 'Bold', 'checkbox', false);
+            const remove = document.createElement('button'); remove.type = 'button';
+            remove.className = 'btn btn-secondary'; remove.textContent = 'Remove';
+            remove.onclick = () => card.remove(); card.append(remove);
+            document.getElementById('textFields').append(card);
         }
-
-        // Reset preview button label on setting change
-        ['nameX','nameY','nameFontSize','nameFont','nameColor','nameBold','deptX','deptY','deptFontSize','deptFont','deptColor','deptBold']
-            .forEach(id => document.getElementById(id)?.addEventListener('change', () => {
-                const btn = document.getElementById('previewBtn');
-                if (!btn.disabled) btn.textContent = 'Update Preview';
-            }));
+        document.getElementById('addTextField').addEventListener('click', () => addTextField());
+        setColumns([]);
+        function getSettings() {
+            const fields = [...document.querySelectorAll('#textFields > .controls')].map(card => {
+                const field = {};
+                card.querySelectorAll('[data-key]').forEach(input => {
+                    field[input.dataset.key] = input.type === 'checkbox' ? input.checked :
+                        (input.dataset.key === 'column' ? Number(input.value) : input.value);
+                });
+                return field;
+            });
+            return {fields, exportFormat: document.getElementById('exportFormat').value};
+        }
 
         // ── Preview ───────────────────────────────────────────────────────────
         document.getElementById('previewBtn').addEventListener('click', async () => {
@@ -587,9 +650,19 @@ CertFlow</textarea>
                 const res = await fetch('/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ template: templateImage, name: participants[0].name, department: participants[0].department, ...getSettings() })
+                    body: JSON.stringify({
+                        template: templateImage,
+                        name: participants[0].name,
+                        department: participants[0].department,
+                        string1: participants[0].string1,
+                        string2: participants[0].string2,
+                        string3: participants[0].string3,
+                        values: participants[0].values,
+                        ...getSettings()
+                    })
                 });
                 const result = await res.json();
+                if (version !== csvRequestVersion) return;
                 if (result.success) {
                     document.getElementById('previewImage').src = result.image;
                     document.getElementById('previewArea').style.display = 'block';
@@ -691,6 +764,85 @@ CertFlow</textarea>
             } finally { btn.disabled = false; }
         });
 
+        async function controlSend(action) {
+            if (!activeSendPayload) return;
+            const response = await fetch(`/send-jobs/${activeSendPayload.jobId}/control`, {
+                method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action})
+            });
+            if (!response.ok) throw new Error('Could not ' + action + ' sending; please try again.');
+            sendPaused = action === 'pause';
+            clearTimeout(retryTimer);
+            document.getElementById('pauseSendBtn').disabled = sendPaused;
+            document.getElementById('resumeSendBtn').disabled = !sendPaused || sendRunning;
+            document.getElementById('sendStatus').textContent = sendPaused ? 'Pausing after the current email…' : 'Resuming…';
+            if (!sendPaused) activeSendPayload.smtpPassword = document.getElementById('smtpPassword').value;
+            if (!sendPaused && !sendRunning) runSend();
+        }
+        ['pause', 'resume'].forEach(action => document.getElementById(action + 'SendBtn').addEventListener('click', () => {
+            controlSend(action).catch(error => { document.getElementById('sendStatus').textContent = error.message; });
+        }));
+        async function runSend() {
+            if (sendRunning || sendPaused || !activeSendPayload) return;
+            sendRunning = true;
+            const sendStatus = document.getElementById('sendStatus');
+            const sendFill = document.getElementById('sendFill');
+            const sendLog = document.getElementById('sendLog');
+            let finished = false, retry = true;
+            try {
+                const res = await fetch('/send-certificates', {
+                    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(activeSendPayload)
+                });
+                if (!res.ok) {
+                    retry = res.status === 409 || res.status === 429 || res.status >= 500;
+                    const data = await res.json();
+                    if (res.status === 400) { activeSendPayload = null; updateSendBtnState(); }
+                    throw new Error(data.error || `HTTP ${res.status}`);
+                }
+                const reader = res.body.getReader(), decoder = new TextDecoder();
+                let buffer = '';
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+                    buffer += decoder.decode(value, {stream: true});
+                    let boundary;
+                    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+                        const chunk = buffer.slice(0, boundary).trim(); buffer = buffer.slice(boundary + 2);
+                        if (!chunk.startsWith('data: ')) continue;
+                        const evt = JSON.parse(chunk.slice(6));
+                        if (evt.message) sendStatus.textContent = evt.message;
+                        if (evt.type === 'sent') {
+                            sendFill.style.width = Math.min(99, Math.round(evt.index / activeSendPayload.participants.length * 100)) + '%';
+                            appendLog(sendLog, `[Sent] ${evt.name} -> ${evt.email}`, 'log-success');
+                        } else if (evt.type === 'failed') {
+                            appendLog(sendLog, `[Failed] ${evt.name} — ${evt.reason}`, 'log-error');
+                        } else if (evt.type === 'paused') {
+                            sendPaused = true;
+                        } else if (evt.type === 'error') {
+                            retry = false;
+                        } else if (evt.type === 'done') {
+                            finished = true;
+                            sendFill.style.width = '100%';
+                            sendStatus.textContent = `Done — ${evt.sent} sent, ${evt.failed} failed, ${evt.skipped} skipped`;
+                        }
+                    }
+                }
+            } catch (error) { sendStatus.textContent = error.message; }
+            finally {
+                sendRunning = false;
+                if (finished) {
+                    activeSendPayload = null;
+                    updateSendBtnState();
+                } else if (!sendPaused && retry) {
+                    sendStatus.textContent += ' — reconnecting in 15 seconds; progress saved.';
+                    retryTimer = setTimeout(runSend, 15000);
+                } else if (!sendPaused) {
+                    sendPaused = true;
+                }
+                document.getElementById('pauseSendBtn').disabled = !activeSendPayload || sendPaused;
+                document.getElementById('resumeSendBtn').disabled = !activeSendPayload || !sendPaused;
+            }
+        }
+
         document.getElementById('sendBtn').addEventListener('click', async () => {
             participants = parseParticipants();
             if (!participants.length) return alert('Add participant data first.');
@@ -734,60 +886,10 @@ CertFlow</textarea>
                 fromName:          document.getElementById('fromName').value || 'CertFlow',
             };
 
-            try {
-                const res = await fetch('/send-certificates', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-
-                const reader  = res.body.getReader();
-                const decoder = new TextDecoder();
-                let buffer = '';
-                let sent = 0, total = withEmail.length;
-
-                while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) break;
-                    buffer += decoder.decode(value, { stream: true });
-
-                    // Robust SSE parse: split on double-newline boundary
-                    let boundary;
-                    while ((boundary = buffer.indexOf('\n\n')) !== -1) {
-                        const chunk = buffer.slice(0, boundary).trim();
-                        buffer = buffer.slice(boundary + 2);
-                        if (!chunk.startsWith('data: ')) continue;
-                        let evt;
-                        try { evt = JSON.parse(chunk.slice(6)); } catch { continue; }
-
-                        if (evt.type === 'status') {
-                            sendStatus.textContent = evt.message;
-                        } else if (evt.type === 'progress') {
-                            sendStatus.textContent = evt.message;
-                            if (evt.total > 0) {
-                                sendFill.style.width = Math.max(5, Math.round(((evt.index - 0.5) / evt.total) * 100)) + '%';
-                            }
-                        } else if (evt.type === 'error') {
-                            sendStatus.textContent = 'Connection failed';
-                            appendLog(sendLog, '[Failed] ' + evt.message, 'log-error');
-                        } else if (evt.type === 'sent') {
-                            sent++;
-                            sendFill.style.width = Math.round((sent / total) * 100) + '%';
-                            sendStatus.textContent = `Sent ${sent} / ${total}`;
-                            appendLog(sendLog, `[Sent] ${evt.name} -> ${evt.email}`, 'log-success');
-                        } else if (evt.type === 'failed') {
-                            appendLog(sendLog, `[Failed] ${evt.name} — ${evt.reason}`, 'log-error');
-                        } else if (evt.type === 'skip') {
-                            appendLog(sendLog, `[Skipped] ${evt.name} (no email)`, 'log-muted');
-                        } else if (evt.type === 'done') {
-                            sendFill.style.width = '100%';
-                            sendStatus.textContent = `Done — ${evt.sent} sent, ${evt.failed} failed, ${evt.skipped} skipped`;
-                        }
-                    }
-                }
-            } catch (err) {
-                sendStatus.textContent = 'Error: ' + err.message;
-            } finally { btn.disabled = false; }
+            activeSendPayload = {...payload, jobId: Array.from(crypto.getRandomValues(new Uint8Array(24)), b => b.toString(16).padStart(2, '0')).join('')};
+            sendPaused = false;
+            document.getElementById('pauseSendBtn').disabled = false;
+            await runSend();
         });
 
         function appendLog(container, text, cls) {
@@ -872,6 +974,260 @@ CertFlow</textarea>
             document.body.removeChild(a);
             URL.revokeObjectURL(url);
         });
+
+        // ── Throttled Mailer UI ───────────────────────────────────────────────
+
+        (function() {
+            let mailerPollerTimer = null;
+
+            // ── DOM refs ─────────────────────────────────────────────────────
+            const queueUpload   = document.getElementById('mailerQueueUpload');
+            const queueFileInput= document.getElementById('mailerQueueFile');
+            const loadStatus    = document.getElementById('mailerLoadStatus');
+            const triggerBtn    = document.getElementById('mailerTriggerBtn');
+            const refreshBtn    = document.getElementById('mailerRefreshBtn');
+            const resetBtn      = document.getElementById('mailerResetBtn');
+            const lastResponse  = document.getElementById('mailerLastResponse');
+            const previewWrap   = document.getElementById('mailerQueuePreviewWrap');
+            const queueTbody    = document.getElementById('mailerQueueTbody');
+
+            // ── Status rendering ──────────────────────────────────────────────
+            function renderStatus(d) {
+                document.getElementById('statTotal').textContent   = d.total  ?? '—';
+                document.getElementById('statSent').textContent    = d.sent   ?? '—';
+                document.getElementById('statPending').textContent = d.pending ?? '—';
+                document.getElementById('statFailed').textContent  = d.failed ?? '—';
+                const batchText = d.batch_size > 0
+                    ? `${d.batch_count}/${d.batch_size}`
+                    : '—';
+                document.getElementById('statBatch').textContent   = batchText;
+
+                const dot  = document.getElementById('mailerPulseDot');
+                const text = document.getElementById('mailerStatusText');
+                const notice = document.getElementById('mailerGmailNotice');
+
+                // Gmail notice
+                if (d.gmail_configured === false) {
+                    notice.style.display = '';
+                    notice.className = 'alert alert-error';
+                    notice.innerHTML = '⚠️ <strong>GMAIL_USER</strong> and <strong>GMAIL_APP_PASSWORD</strong> env vars are not set on this server. The throttled mailer cannot send emails until these are configured.';
+                } else {
+                    notice.style.display = 'none';
+                }
+
+                dot.className = 'pulse-dot';
+                switch (d.status) {
+                    case 'ready':
+                        dot.classList.add('active');
+                        text.textContent = `Ready — next send will fire immediately.`;
+                        break;
+                    case 'waiting':
+                        dot.classList.add('active');
+                        const wMin = d.next_send_in_minutes ?? '?';
+                        const wSec = d.next_send_in_seconds ?? '?';
+                        text.textContent = `Waiting — next send in ${wMin} min (${wSec} s).`;
+                        break;
+                    case 'manual_pause':
+                        dot.classList.add('paused');
+                        text.textContent = 'Paused by you — click Resume to continue.';
+                        break;
+                    case 'retry_wait':
+                        text.textContent = 'Connection interrupted — pending email will retry on the next scheduled trigger.';
+                        break;
+                    case 'paused':
+                        dot.classList.add('paused');
+                        const pMin = d.next_send_in_minutes ?? '?';
+                        text.textContent = `Inter-batch pause — resuming in ${pMin} min.`;
+                        break;
+                    case 'done':
+                        dot.classList.add('done');
+                        text.textContent = `✓ All ${d.sent} emails sent. Queue complete.`;
+                        break;
+                    case 'empty':
+                        text.textContent = 'Queue is empty. Load a CSV or JSON file to start.';
+                        break;
+                    case 'idle':
+                        text.textContent = 'Queue loaded — trigger a send or wait for cron.';
+                        break;
+                    default:
+                        text.textContent = `Status: ${d.status}`;
+                }
+
+                // Queue preview table
+                const rows = [...(d.recent || []).map(r => ({...r, isSent: true})),
+                               ...(d.upcoming || [])];
+                if (rows.length > 0) {
+                    previewWrap.style.display = '';
+                    queueTbody.innerHTML = '';
+                    rows.forEach((r, i) => {
+                        const isCurrent = !r.isSent && i === (d.recent || []).length;
+                        const tr = document.createElement('tr');
+                        let badgeClass = 'pending';
+                        let badgeText  = 'Pending';
+                        if (r.status === 'sent')    { badgeClass = 'sent';  badgeText = '✓ Sent'; }
+                        else if (r.status === 'failed') { badgeClass = 'pending'; badgeText = '✗ Failed'; }
+                        else if (isCurrent)         { badgeClass = 'next';  badgeText = '→ Next'; }
+
+                        tr.className = r.status === 'sent' ? 'row-sent' : (isCurrent ? 'row-current' : 'row-pending');
+                        tr.innerHTML = `
+                            <td>${r.id}</td>
+                            <td title="${r.name}">${r.name}</td>
+                            <td title="${r.email}">${r.email}</td>
+                            <td title="${r.cert_path || ''}">${r.cert_path || '<span style="color:var(--text-muted)">—</span>'}</td>
+                            <td><span class="queue-badge ${badgeClass}">${badgeText}</span></td>
+                        `;
+                        queueTbody.appendChild(tr);
+                    });
+                } else if (d.total > 0) {
+                    previewWrap.style.display = '';
+                }
+            }
+
+            // ── Fetch status ──────────────────────────────────────────────────
+            async function fetchStatus(showResponse) {
+                try {
+                    const res = await fetch('/mailer/status');
+                    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                    const d = await res.json();
+                    renderStatus(d);
+                    if (showResponse) {
+                        lastResponse.style.display = '';
+                        lastResponse.textContent = JSON.stringify(d, null, 2);
+                    }
+                } catch (err) {
+                    document.getElementById('mailerStatusText').textContent = 'Could not fetch status: ' + err.message;
+                }
+            }
+
+            // Load status on page load and auto-refresh every 30 s
+            fetchStatus(false);
+            mailerPollerTimer = setInterval(() => fetchStatus(false), 30000);
+
+            // ── File upload: parse CSV or JSON → load queue ───────────────────
+            queueUpload.addEventListener('click', () => queueFileInput.click());
+            queueUpload.addEventListener('dragover', e => { e.preventDefault(); queueUpload.classList.add('dragover'); });
+            queueUpload.addEventListener('dragleave', () => queueUpload.classList.remove('dragover'));
+            queueUpload.addEventListener('drop', e => {
+                e.preventDefault(); queueUpload.classList.remove('dragover');
+                const f = e.dataTransfer.files[0];
+                if (f) loadQueueFile(f);
+            });
+            queueFileInput.addEventListener('change', e => { if (e.target.files[0]) loadQueueFile(e.target.files[0]); });
+
+            async function loadQueueFile(file) {
+                loadStatus.textContent = `Reading ${file.name}…`;
+                loadStatus.style.color = 'var(--text-muted)';
+
+                let entries;
+                try {
+                    const text = await file.text();
+                    if (file.name.endsWith('.json')) {
+                        entries = JSON.parse(text);
+                        if (!Array.isArray(entries)) throw new Error('JSON must be an array.');
+                    } else {
+                        // CSV: name,email,cert_path  (header optional)
+                        const lines = text.split(/\r?\n/).filter(l => l.trim());
+                        const first = lines[0].toLowerCase();
+                        const start = (first.includes('name') || first.includes('email')) ? 1 : 0;
+                        entries = lines.slice(start).map(line => {
+                            const cols = line.split(',').map(c => c.trim());
+                            return { name: cols[0] || '', email: cols[1] || '', cert_path: cols[2] || '' };
+                        }).filter(e => e.name || e.email);
+                    }
+                } catch (err) {
+                    loadStatus.textContent = 'Parse error: ' + err.message;
+                    loadStatus.style.color = 'var(--error)';
+                    return;
+                }
+
+                loadStatus.textContent = `Parsed ${entries.length} entries — uploading to server…`;
+
+                try {
+                    const res = await fetch('/mailer/load-queue', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ queue: entries })
+                    });
+                    const d = await res.json();
+                    if (d.success) {
+                        loadStatus.textContent = `✓ Loaded ${d.loaded} recipients into queue.`;
+                        loadStatus.style.color = 'var(--success)';
+                        await fetchStatus(false);
+                    } else {
+                        loadStatus.textContent = 'Server error: ' + d.error;
+                        loadStatus.style.color = 'var(--error)';
+                    }
+                } catch (err) {
+                    loadStatus.textContent = 'Network error: ' + err.message;
+                    loadStatus.style.color = 'var(--error)';
+                }
+            }
+
+            // ── Trigger next send ─────────────────────────────────────────────
+            triggerBtn.addEventListener('click', async () => {
+                triggerBtn.disabled = true;
+                triggerBtn.textContent = 'Sending…';
+                try {
+                    const res = await fetch('/mailer/send-next');
+                    const d   = await res.json();
+                    lastResponse.style.display = '';
+                    lastResponse.textContent = JSON.stringify(d, null, 2);
+                    await fetchStatus(false);
+                } catch (err) {
+                    lastResponse.style.display = '';
+                    lastResponse.textContent = 'Error: ' + err.message;
+                } finally {
+                    triggerBtn.disabled = false;
+                    triggerBtn.textContent = '⚡ Trigger Next Send';
+                }
+            });
+
+            ['pause', 'resume'].forEach(action => {
+                const button = document.getElementById(action === 'pause' ? 'mailerPauseBtn' : 'mailerResumeBtn');
+                button.addEventListener('click', async () => {
+                    button.disabled = true;
+                    try {
+                        const res = await fetch('/mailer/control', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({action})});
+                        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                        await fetchStatus(false);
+                    } catch (error) { lastResponse.style.display = ''; lastResponse.textContent = error.message; }
+                    finally { button.disabled = false; }
+                });
+            });
+
+            // ── Refresh ───────────────────────────────────────────────────────
+            refreshBtn.addEventListener('click', async () => {
+                refreshBtn.disabled = true;
+                await fetchStatus(true);
+                refreshBtn.disabled = false;
+            });
+
+            // ── Reset / clear queue ───────────────────────────────────────────
+            resetBtn.addEventListener('click', async () => {
+                if (!confirm('Clear the entire queue and reset all throttle state? This cannot be undone.')) return;
+                resetBtn.disabled = true;
+                try {
+                    const res = await fetch('/mailer/reset', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ confirm: 'yes' })
+                    });
+                    const d = await res.json();
+                    lastResponse.style.display = '';
+                    lastResponse.textContent = JSON.stringify(d, null, 2);
+                    loadStatus.textContent = '';
+                    queueTbody.innerHTML = '';
+                    previewWrap.style.display = 'none';
+                    await fetchStatus(false);
+                } catch (err) {
+                    lastResponse.style.display = '';
+                    lastResponse.textContent = 'Error: ' + err.message;
+                } finally {
+                    resetBtn.disabled = false;
+                }
+            });
+        })();
+
     </script>
 </body>
 </html>
