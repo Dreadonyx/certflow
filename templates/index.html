@@ -662,7 +662,6 @@ CertFlow</textarea>
                     })
                 });
                 const result = await res.json();
-                if (version !== csvRequestVersion) return;
                 if (result.success) {
                     document.getElementById('previewImage').src = result.image;
                     document.getElementById('previewArea').style.display = 'block';
