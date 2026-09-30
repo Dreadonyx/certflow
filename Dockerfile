@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create runtime directories and set permissions
-RUN mkdir -p uploads output_certs \
+RUN mkdir -p uploads output_certs data \
     && addgroup --system certflow \
     && adduser --system --ingroup certflow certflow \
     && chown -R certflow:certflow /app

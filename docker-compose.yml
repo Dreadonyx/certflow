@@ -23,10 +23,16 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    volumes:
+      # Persist the SQLite DB (users, mailer queue/credentials/throttle state)
+      # across rebuilds - without this, `docker compose up --build` wipes it
+      # since it otherwise lives in the container's writable layer.
+      - certflow_data:/app/data
     environment:
       # ── App security (values come from .env, populated by scripts/server-setup.sh)
       FLASK_ENV: production
       SECRET_KEY: ${SECRET_KEY}
+      DB_PATH: /app/data/certflow_users.db
 
       # ── Admin credentials ──────────────────────────────────────────
       # To generate a new hash: python3 -c "from argon2 import PasswordHasher; print(PasswordHasher().hash('NewPassword'))"
@@ -82,3 +88,4 @@ services:
 volumes:
   caddy_data:
   caddy_config:
+  certflow_data:
