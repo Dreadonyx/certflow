@@ -45,9 +45,11 @@ fi
 
 echo "=== Ensuring buildx is current (compose build needs >= 0.17) ==="
 ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH="amd64" || ARCH="arm64"
+BUILDX_URL=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
+  | grep -o "\"browser_download_url\": *\"[^\"]*linux-${ARCH}\"" \
+  | head -1 | cut -d'"' -f4)
 mkdir -p ~/.docker/cli-plugins
-curl -fsSL "https://github.com/docker/buildx/releases/latest/download/buildx-linux-${ARCH}" \
-  -o ~/.docker/cli-plugins/docker-buildx
+curl -fsSL "$BUILDX_URL" -o ~/.docker/cli-plugins/docker-buildx
 chmod +x ~/.docker/cli-plugins/docker-buildx
 
 echo "=== Starting CertFlow ==="

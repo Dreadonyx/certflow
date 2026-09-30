@@ -33,10 +33,11 @@ curl -fsSL \
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 echo "=== Installing Docker Buildx plugin ==="
+BUILDX_URL=$(curl -fsSL https://api.github.com/repos/docker/buildx/releases/latest \
+  | grep -o '"browser_download_url": *"[^"]*linux-amd64"' \
+  | head -1 | cut -d'"' -f4)
 mkdir -p /home/ec2-user/.docker/cli-plugins
-curl -fsSL \
-  "https://github.com/docker/buildx/releases/latest/download/buildx-linux-amd64" \
-  -o /home/ec2-user/.docker/cli-plugins/docker-buildx
+curl -fsSL "$BUILDX_URL" -o /home/ec2-user/.docker/cli-plugins/docker-buildx
 chmod +x /home/ec2-user/.docker/cli-plugins/docker-buildx
 chown -R ec2-user:ec2-user /home/ec2-user/.docker
 
