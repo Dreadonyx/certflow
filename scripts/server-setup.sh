@@ -16,23 +16,18 @@ SECRET_JSON=$(aws secretsmanager get-secret-value \
 
 echo "=== Writing .env ==="
 export SECRET_JSON
-python3 - << 'PYEOF'
-import json, os, stat
+python3 - > "$APP_DIR/.env" << 'PYEOF'
+import json, os
 
 data = json.loads(os.environ["SECRET_JSON"])
-app_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) \
-    if "__file__" in dir() else os.getcwd()
-
 # DUCKDNS_TOKEN is used by the cron job below, not passed to docker-compose
 skip = {"DUCKDNS_TOKEN"}
-lines = [f"{k}={v}" for k, v in data.items() if k not in skip]
-
-env_path = os.path.join(os.environ.get("APP_DIR", app_dir), ".env")
-with open(env_path, "w") as f:
-    f.write("\n".join(lines) + "\n")
-os.chmod(env_path, stat.S_IRUSR | stat.S_IWUSR)
-print(f"  Written {len(lines)} keys to {env_path}")
+for k, v in data.items():
+    if k not in skip:
+        print(f"{k}={v}")
 PYEOF
+chmod 600 "$APP_DIR/.env"
+echo "  Written $(wc -l < "$APP_DIR/.env") keys to $APP_DIR/.env"
 
 echo "=== Setting up DuckDNS cron ==="
 DUCKDNS_TOKEN=$(python3 -c "import json,os; d=json.loads(os.environ['SECRET_JSON']); print(d.get('DUCKDNS_TOKEN',''))")
@@ -47,6 +42,13 @@ if [ -n "$DUCKDNS_TOKEN" ] && [ "$DUCKDNS_TOKEN" != "REPLACE_WITH_DUCKDNS_TOKEN"
 else
   echo "  DUCKDNS_TOKEN not set - skipping. Update the secret and re-run to enable."
 fi
+
+echo "=== Ensuring buildx is current (compose build needs >= 0.17) ==="
+ARCH=$(uname -m); [ "$ARCH" = "x86_64" ] && ARCH="amd64" || ARCH="arm64"
+mkdir -p ~/.docker/cli-plugins
+curl -fsSL "https://github.com/docker/buildx/releases/latest/download/buildx-linux-${ARCH}" \
+  -o ~/.docker/cli-plugins/docker-buildx
+chmod +x ~/.docker/cli-plugins/docker-buildx
 
 echo "=== Starting CertFlow ==="
 cd "$APP_DIR"

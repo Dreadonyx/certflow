@@ -32,6 +32,14 @@ curl -fsSL \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
+echo "=== Installing Docker Buildx plugin ==="
+mkdir -p /home/ec2-user/.docker/cli-plugins
+curl -fsSL \
+  "https://github.com/docker/buildx/releases/latest/download/buildx-linux-amd64" \
+  -o /home/ec2-user/.docker/cli-plugins/docker-buildx
+chmod +x /home/ec2-user/.docker/cli-plugins/docker-buildx
+chown -R ec2-user:ec2-user /home/ec2-user/.docker
+
 echo "=== Cloning CertFlow repository ==="
 cd /home/ec2-user
 git clone {REPO_URL} Certs-Automator
