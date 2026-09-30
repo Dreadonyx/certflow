@@ -1386,26 +1386,21 @@ def _tm_batch_pause():
     return _tm_jitter(random.uniform(_TM_PAUSE_MIN, _TM_PAUSE_MAX))
 
 
-# ── Mailer SMTP helper (uses env vars, same as existing _make_smtp_connection) ─
+# ── Mailer SMTP helper ──────────────────────────────────────────────────────
 
-_TM_GMAIL_USER = lambda: os.environ.get('GMAIL_USER', '')
-_TM_GMAIL_PASS = lambda: os.environ.get('GMAIL_APP_PASSWORD', '')
-_TM_SUBJECT    = lambda: os.environ.get('MAILER_SUBJECT', 'Your Certificate — CertFlow')
+_TM_SUBJECT = lambda: os.environ.get('MAILER_SUBJECT', 'Your Certificate — CertFlow')
 
 
 def _tm_get_smtp_config():
-    """SMTP config for the throttled mailer: UI-saved creds first, then legacy env vars."""
+    """SMTP config for the throttled mailer. UI-saved credentials only - no env-var default."""
     raw = _mstate_get('tm_smtp_config')
-    if raw:
-        try:
-            cfg = json.loads(raw)
-            return cfg['host'], cfg['port'], cfg['mode'], cfg['user'], cfg['password'], cfg['sender']
-        except (ValueError, KeyError):
-            pass
-    gmail_user, gmail_pass = _TM_GMAIL_USER(), _TM_GMAIL_PASS()
-    if gmail_user and gmail_pass:
-        return 'smtp.gmail.com', 587, 'starttls', gmail_user, gmail_pass, gmail_user
-    return None
+    if not raw:
+        return None
+    try:
+        cfg = json.loads(raw)
+        return cfg['host'], cfg['port'], cfg['mode'], cfg['user'], cfg['password'], cfg['sender']
+    except (ValueError, KeyError):
+        return None
 _TM_BODY_HTML  = """\
 <html><body>
 <p>Dear <b>{name}</b>,</p>
@@ -1500,8 +1495,6 @@ def mailer_get_credentials():
             return jsonify({'configured': True, 'sender': cfg.get('sender', ''), 'source': 'ui'})
         except ValueError:
             pass
-    if _TM_GMAIL_USER() and _TM_GMAIL_PASS():
-        return jsonify({'configured': True, 'sender': _TM_GMAIL_USER(), 'source': 'env'})
     return jsonify({'configured': False})
 
 

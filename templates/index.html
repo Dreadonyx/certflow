@@ -1041,9 +1041,9 @@ CertFlow</textarea>
                     const res = await fetch('/mailer/get-credentials');
                     const d = await res.json();
                     if (d.configured) {
-                        statusEl.textContent = `Configured — sending as ${d.sender}${d.source === 'env' ? ' (server env)' : ''}`;
+                        statusEl.textContent = `Configured — sending as ${d.sender}`;
                         statusEl.style.color = 'var(--success)';
-                        if (d.source === 'ui') document.getElementById('mailerSmtpUser').value = d.sender;
+                        document.getElementById('mailerSmtpUser').value = d.sender;
                     } else {
                         statusEl.textContent = 'Not configured — set credentials above before sending.';
                         statusEl.style.color = 'var(--error)';
