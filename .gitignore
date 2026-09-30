@@ -1,2 +1,7 @@
 uploads
 certs
+.env
+infra/.venv/
+infra/cdk.out/
+__pycache__/
+*.pyc
