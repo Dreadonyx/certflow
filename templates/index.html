@@ -281,6 +281,44 @@ CertFlow</textarea>
             <!-- Gmail config notice -->
             <div id="mailerGmailNotice" class="alert" style="display:none;margin-bottom:14px;"></div>
 
+            <!-- SMTP Credentials -->
+            <h3 style="margin-bottom:8px;">Sender Credentials</h3>
+            <div class="controls">
+                <div class="control-group">
+                    <label>Email Provider</label>
+                    <select id="mailerSmtpProvider" onchange="onMailerProviderChange()">
+                        <option value="gmail">Gmail</option>
+                        <option value="outlook">Outlook / Hotmail</option>
+                        <option value="yahoo">Yahoo Mail</option>
+                        <option value="zoho">Zoho Mail</option>
+                        <option value="custom">Custom SMTP</option>
+                    </select>
+                </div>
+                <div class="control-group" id="mailerSmtpHostGroup" style="display:none;">
+                    <label>SMTP Host</label>
+                    <input type="text" id="mailerSmtpHost" placeholder="smtp.example.com">
+                </div>
+                <div class="control-group" id="mailerSmtpPortGroup" style="display:none;">
+                    <label>SMTP Port</label>
+                    <input type="number" id="mailerSmtpPort" value="587">
+                </div>
+            </div>
+            <div class="controls" style="margin-top:12px;">
+                <div class="control-group">
+                    <label>Sender Email</label>
+                    <input type="email" id="mailerSmtpUser" placeholder="you@gmail.com" autocomplete="username">
+                </div>
+                <div class="control-group" style="position:relative;">
+                    <label>App Password</label>
+                    <input type="password" id="mailerSmtpPassword" placeholder="App password / token" autocomplete="current-password" style="padding-right:52px;">
+                    <button type="button" id="toggleMailerSmtpPass" onclick="(function(){var i=document.getElementById('mailerSmtpPassword');var b=document.getElementById('toggleMailerSmtpPass');var isPw=i.type==='password';i.type=isPw?'text':'password';b.textContent=isPw?'Hide':'Show';})()" style="position:absolute;right:8px;bottom:7px;background:none;border:none;cursor:pointer;font-size:12px;font-weight:600;padding:3px 6px;color:var(--text-muted);">Show</button>
+                </div>
+            </div>
+            <div style="margin-top:10px; margin-bottom:16px; display:flex; align-items:center; gap:12px;">
+                <button class="btn btn-secondary" id="mailerSaveCredsBtn" type="button" style="padding:8px 18px; font-size:13px;">Save Credentials</button>
+                <span id="mailerCredsStatus" style="font-size:13px;"></span>
+            </div>
+
             <!-- Progress stats -->
             <div class="mailer-stats" id="mailerStats">
                 <div class="stat-card"><div class="stat-value" id="statTotal">—</div><div class="stat-label">Total</div></div>
@@ -990,6 +1028,71 @@ CertFlow</textarea>
             const previewWrap   = document.getElementById('mailerQueuePreviewWrap');
             const queueTbody    = document.getElementById('mailerQueueTbody');
 
+            // ── Sender credentials (dynamic, per Step 5's pattern) ─────────────
+            window.onMailerProviderChange = function() {
+                const custom = document.getElementById('mailerSmtpProvider').value === 'custom';
+                document.getElementById('mailerSmtpHostGroup').style.display = custom ? '' : 'none';
+                document.getElementById('mailerSmtpPortGroup').style.display = custom ? '' : 'none';
+            };
+
+            async function loadMailerCredsStatus() {
+                const statusEl = document.getElementById('mailerCredsStatus');
+                try {
+                    const res = await fetch('/mailer/get-credentials');
+                    const d = await res.json();
+                    if (d.configured) {
+                        statusEl.textContent = `Configured — sending as ${d.sender}${d.source === 'env' ? ' (server env)' : ''}`;
+                        statusEl.style.color = 'var(--success)';
+                        if (d.source === 'ui') document.getElementById('mailerSmtpUser').value = d.sender;
+                    } else {
+                        statusEl.textContent = 'Not configured — set credentials above before sending.';
+                        statusEl.style.color = 'var(--error)';
+                    }
+                } catch (err) { /* non-fatal */ }
+            }
+            loadMailerCredsStatus();
+
+            document.getElementById('mailerSaveCredsBtn').addEventListener('click', async () => {
+                const btn = document.getElementById('mailerSaveCredsBtn');
+                const statusEl = document.getElementById('mailerCredsStatus');
+                const user = document.getElementById('mailerSmtpUser').value.trim();
+                const pass = document.getElementById('mailerSmtpPassword').value;
+                if (!user || !pass) {
+                    statusEl.textContent = 'Enter your sender email and app password first.';
+                    statusEl.style.color = 'var(--warning-text)';
+                    return;
+                }
+                btn.disabled = true;
+                statusEl.textContent = 'Saving…';
+                statusEl.style.color = 'var(--text-muted)';
+                try {
+                    const res = await fetch('/mailer/set-credentials', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            smtpProvider: document.getElementById('mailerSmtpProvider').value,
+                            smtpUser:     user,
+                            smtpPassword: pass,
+                            smtpHost:     document.getElementById('mailerSmtpHost')?.value || '',
+                            smtpPort:     document.getElementById('mailerSmtpPort')?.value || '587',
+                        })
+                    });
+                    const d = await res.json();
+                    if (d.success) {
+                        statusEl.textContent = `Saved — sending as ${d.sender}`;
+                        statusEl.style.color = 'var(--success)';
+                        document.getElementById('mailerSmtpPassword').value = '';
+                        fetchStatus(false);
+                    } else {
+                        statusEl.textContent = d.error || 'Failed to save credentials.';
+                        statusEl.style.color = 'var(--error)';
+                    }
+                } catch (err) {
+                    statusEl.textContent = err.message;
+                    statusEl.style.color = 'var(--error)';
+                } finally { btn.disabled = false; }
+            });
+
             // ── Status rendering ──────────────────────────────────────────────
             function renderStatus(d) {
                 document.getElementById('statTotal').textContent   = d.total  ?? '—';
@@ -1009,7 +1112,7 @@ CertFlow</textarea>
                 if (d.gmail_configured === false) {
                     notice.style.display = '';
                     notice.className = 'alert alert-error';
-                    notice.innerHTML = '⚠️ <strong>GMAIL_USER</strong> and <strong>GMAIL_APP_PASSWORD</strong> env vars are not set on this server. The throttled mailer cannot send emails until these are configured.';
+                    notice.innerHTML = '⚠️ No sender credentials configured. Set them in <strong>Sender Credentials</strong> above before the throttled mailer can send.';
                 } else {
                     notice.style.display = 'none';
                 }

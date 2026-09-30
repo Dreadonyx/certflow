@@ -1391,6 +1391,21 @@ def _tm_batch_pause():
 _TM_GMAIL_USER = lambda: os.environ.get('GMAIL_USER', '')
 _TM_GMAIL_PASS = lambda: os.environ.get('GMAIL_APP_PASSWORD', '')
 _TM_SUBJECT    = lambda: os.environ.get('MAILER_SUBJECT', 'Your Certificate — CertFlow')
+
+
+def _tm_get_smtp_config():
+    """SMTP config for the throttled mailer: UI-saved creds first, then legacy env vars."""
+    raw = _mstate_get('tm_smtp_config')
+    if raw:
+        try:
+            cfg = json.loads(raw)
+            return cfg['host'], cfg['port'], cfg['mode'], cfg['user'], cfg['password'], cfg['sender']
+        except (ValueError, KeyError):
+            pass
+    gmail_user, gmail_pass = _TM_GMAIL_USER(), _TM_GMAIL_PASS()
+    if gmail_user and gmail_pass:
+        return 'smtp.gmail.com', 587, 'starttls', gmail_user, gmail_pass, gmail_user
+    return None
 _TM_BODY_HTML  = """\
 <html><body>
 <p>Dear <b>{name}</b>,</p>
@@ -1403,11 +1418,11 @@ _TM_BODY_TEXT  = ("Dear {name},\n\nCongratulations! Please find your certificate
 
 
 def _tm_send_one(recipient_id, email, name, cert_path):
-    """Send one certificate email via env-var Gmail credentials. Raises on failure."""
-    gmail_user = _TM_GMAIL_USER()
-    gmail_pass = _TM_GMAIL_PASS()
-    if not gmail_user or not gmail_pass:
-        raise RuntimeError('GMAIL_USER / GMAIL_APP_PASSWORD env vars are not set on this server.')
+    """Send one certificate email via configured SMTP credentials. Raises on failure."""
+    config = _tm_get_smtp_config()
+    if not config:
+        raise RuntimeError('Mailer SMTP credentials are not configured. Set them in Step 6 above.')
+    smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass, sender = config
 
     full_path = os.path.join(os.path.dirname(__file__), cert_path)
     if not os.path.exists(full_path):
@@ -1417,7 +1432,7 @@ def _tm_send_one(recipient_id, email, name, cert_path):
 
     msg = MIMEMultipart('mixed')
     msg['Subject'] = _TM_SUBJECT()
-    msg['From']    = gmail_user
+    msg['From']    = sender
     msg['To']      = email
 
     alt = MIMEMultipart('alternative')
@@ -1442,17 +1457,61 @@ def _tm_send_one(recipient_id, email, name, cert_path):
     part.add_header('Content-Disposition', 'attachment', filename=cert_filename)
     msg.attach(part)
 
-    with smtplib.SMTP('smtp.gmail.com', 587, timeout=30) as smtp:
-        smtp.ehlo()
-        smtp.starttls()
-        smtp.ehlo()
-        smtp.login(gmail_user, gmail_pass)
-        smtp.sendmail(gmail_user, [email], msg.as_bytes())
+    server = _make_smtp_connection(smtp_host, smtp_port, smtp_mode, smtp_user, smtp_pass)
+    try:
+        server.sendmail(sender, [email], msg.as_bytes())
+    finally:
+        try:
+            server.quit()
+        except Exception:
+            pass
 
     logger.info('[ThrottledMailer] Sent certificate to %s (%s)', email, name)
 
 
 # ── Throttled Mailer Routes ───────────────────────────────────────────────────
+
+@app.route('/mailer/set-credentials', methods=['POST'])
+@login_required
+@limiter.limit('20 per minute')
+def mailer_set_credentials():
+    """Save SMTP credentials for the throttled mailer (Step 6), entered via the UI."""
+    require_csrf()
+    data = request.json or {}
+    try:
+        host, port, mode, user, password, sender = _resolve_smtp_from_request(data)
+    except ValueError as e:
+        return jsonify({'success': False, 'error': str(e)}), 400
+    _mstate_set('tm_smtp_config', json.dumps({
+        'host': host, 'port': port, 'mode': mode,
+        'user': user, 'password': password, 'sender': sender,
+    }))
+    return jsonify({'success': True, 'sender': sender})
+
+
+@app.route('/mailer/get-credentials')
+@login_required
+def mailer_get_credentials():
+    """Report whether mailer SMTP credentials are configured. Never returns the password."""
+    raw = _mstate_get('tm_smtp_config')
+    if raw:
+        try:
+            cfg = json.loads(raw)
+            return jsonify({'configured': True, 'sender': cfg.get('sender', ''), 'source': 'ui'})
+        except ValueError:
+            pass
+    if _TM_GMAIL_USER() and _TM_GMAIL_PASS():
+        return jsonify({'configured': True, 'sender': _TM_GMAIL_USER(), 'source': 'env'})
+    return jsonify({'configured': False})
+
+
+@app.route('/mailer/clear-credentials', methods=['POST'])
+@login_required
+def mailer_clear_credentials():
+    require_csrf()
+    _mstate_delete('tm_smtp_config')
+    return jsonify({'success': True})
+
 
 @app.route('/mailer/load-queue', methods=['POST'])
 @login_required
@@ -1716,7 +1775,7 @@ def mailer_status():
         'last_sent_at': last_sent,
         'recent': [_row(r) for r in recent],
         'upcoming': [_row(r) for r in upcoming],
-        'gmail_configured': bool(_TM_GMAIL_USER() and _TM_GMAIL_PASS()),
+        'gmail_configured': _tm_get_smtp_config() is not None,
     })
 
 
