@@ -713,6 +713,12 @@ def health():
     return jsonify({'status': 'ok'}), 200
 
 
+@app.route('/robots.txt')
+def robots_txt():
+    """Keep this login-gated admin tool out of search engine indexes."""
+    return Response('User-agent: *\nDisallow: /\n', mimetype='text/plain')
+
+
 @app.after_request
 def add_security_headers(response):
     response.headers.setdefault('X-Content-Type-Options', 'nosniff')
