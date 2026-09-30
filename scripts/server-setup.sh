@@ -24,7 +24,11 @@ data = json.loads(os.environ["SECRET_JSON"])
 skip = {"DUCKDNS_TOKEN"}
 for k, v in data.items():
     if k not in skip:
-        print(f"{k}={v}")
+        # docker compose re-interpolates $word patterns found inside .env
+        # values (e.g. an argon2 hash's $argon2id$v=19$... segments get
+        # treated as nested variable refs and blanked out) - escape $ as $$
+        # so compose passes the literal value through to the container.
+        print(f"{k}={str(v).replace('$', '$$')}")
 PYEOF
 chmod 600 "$APP_DIR/.env"
 echo "  Written $(wc -l < "$APP_DIR/.env") keys to $APP_DIR/.env"
